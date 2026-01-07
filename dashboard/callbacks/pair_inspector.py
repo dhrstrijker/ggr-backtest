@@ -1,6 +1,8 @@
 """Callbacks for Page 3: Pair Inspector."""
 
-from dash import html, callback, Input, Output, no_update
+from urllib.parse import parse_qs
+
+from dash import html, callback, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import pandas as pd
@@ -12,8 +14,33 @@ def register_pair_inspector_callbacks(app, data_store):
     """Register Pair Inspector page callbacks."""
 
     @app.callback(
+        Output("current-pair", "data"),
+        Input("url", "search"),
+    )
+    def parse_pair_from_url(search):
+        """Parse pair from URL query parameter."""
+        if not search:
+            return None
+
+        params = parse_qs(search.lstrip("?"))
+        pair_key = params.get("pair", [None])[0]
+        return pair_key
+
+    @app.callback(
+        Output("pair-inspector-title", "children"),
+        Input("current-pair", "data"),
+    )
+    def update_page_title(pair_value):
+        """Update the page title with the current pair name."""
+        if not pair_value:
+            return "Pair Inspector"
+
+        sym_a, sym_b = pair_value.split("_")
+        return f"Pair Inspector: {sym_a} / {sym_b}"
+
+    @app.callback(
         Output("normalized-prices-chart", "figure"),
-        [Input("pair-selector", "value"),
+        [Input("current-pair", "data"),
          Input("wait-mode-store", "data")],
     )
     def update_prices_chart(pair_value, wait_mode):
@@ -141,7 +168,7 @@ def register_pair_inspector_callbacks(app, data_store):
 
     @app.callback(
         Output("spread-distance-chart", "figure"),
-        [Input("pair-selector", "value"),
+        [Input("current-pair", "data"),
          Input("wait-mode-store", "data")],
     )
     def update_distance_chart(pair_value, wait_mode):
@@ -272,13 +299,13 @@ def register_pair_inspector_callbacks(app, data_store):
 
     @app.callback(
         Output("pair-stats-sidebar", "children"),
-        [Input("pair-selector", "value"),
+        [Input("current-pair", "data"),
          Input("wait-mode-store", "data")],
     )
     def update_pair_stats(pair_value, wait_mode):
         """Update the pair statistics sidebar."""
         if not pair_value:
-            return html.P("Select a pair to view statistics")
+            return html.P("No pair selected", className="text-muted")
 
         # Parse pair
         sym_a, sym_b = pair_value.split("_")
@@ -353,13 +380,13 @@ def register_pair_inspector_callbacks(app, data_store):
 
     @app.callback(
         Output("pair-trades-table", "children"),
-        [Input("pair-selector", "value"),
+        [Input("current-pair", "data"),
          Input("wait-mode-store", "data")],
     )
     def update_trades_table(pair_value, wait_mode):
         """Update the trade history table."""
         if not pair_value:
-            return html.P("Select a pair to view trade history")
+            return html.P("No pair selected", className="text-muted")
 
         # Parse pair
         sym_a, sym_b = pair_value.split("_")

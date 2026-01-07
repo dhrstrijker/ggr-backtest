@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 from ..layouts.page1_fund_overview import create_fund_overview_layout
 from ..layouts.page2_live_monitor import create_live_monitor_layout
 from ..layouts.page3_pair_inspector import create_pair_inspector_layout
+from ..layouts.page4_pairs_summary import create_pairs_summary_layout
 
 
 def register_navigation_callbacks(app, data_store):
@@ -21,6 +22,8 @@ def register_navigation_callbacks(app, data_store):
             return create_fund_overview_layout(data_store)
         elif pathname == "/live":
             return create_live_monitor_layout(data_store)
+        elif pathname == "/summary":
+            return create_pairs_summary_layout(data_store)
         elif pathname == "/pairs":
             return create_pair_inspector_layout(data_store)
         else:
@@ -30,7 +33,7 @@ def register_navigation_callbacks(app, data_store):
     @app.callback(
         [Output("nav-overview", "active"),
          Output("nav-live", "active"),
-         Output("nav-pairs", "active")],
+         Output("nav-summary", "active")],
         Input("url", "pathname"),
     )
     def update_nav_active(pathname):
@@ -38,7 +41,7 @@ def register_navigation_callbacks(app, data_store):
         return (
             pathname == "/" or pathname == "/overview",
             pathname == "/live",
-            pathname == "/pairs",
+            pathname == "/summary" or pathname == "/pairs",  # Pairs Inspector accessed via Summary
         )
 
     @app.callback(
@@ -59,3 +62,15 @@ def register_navigation_callbacks(app, data_store):
         if n_clicks:
             return not is_open
         return is_open
+
+    @app.callback(
+        Output("url", "pathname", allow_duplicate=True),
+        [Input("url", "pathname"),
+         Input("url", "search")],
+        prevent_initial_call=True,
+    )
+    def redirect_pairs_without_param(pathname, search):
+        """Redirect /pairs without ?pair= param to /summary."""
+        if pathname == "/pairs" and (not search or "pair=" not in search):
+            return "/summary"
+        return no_update

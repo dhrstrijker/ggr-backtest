@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     "formation_days": 252,
     "entry_threshold": 2.0,
     "max_holding_days": 126,
-    "top_n_pairs": 10,
+    "top_n_pairs": 5,
     "capital_per_trade": 10000.0,
     "commission": 0.001,
 }
