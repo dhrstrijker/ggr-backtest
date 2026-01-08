@@ -1,10 +1,19 @@
 # GGR Distance Method - Pair Trading Backtester
 
-A simple, self-contained backtester for the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distance Method** of statistical pair trading.
+A Python implementation of the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distance Method** for statistical pair trading, featuring the full staggered portfolio methodology and an interactive dashboard.
+
+## Features
+
+- **Staggered Portfolio Methodology**: Overlapping portfolios with 12-month formation and 6-month trading periods (~6 active portfolios at steady state)
+- **Static Formation Statistics**: Standard deviation calculated once during formation (not rolling)
+- **Proper Execution Timing**: Signals at close, execution at next-day open (no lookahead bias)
+- **Interactive Dashboard**: Visualize performance, analyze pairs, and inspect trades with correct per-cycle calculations
+- **Comprehensive Test Suite**: 184 tests covering methodology edge cases
 
 ## Table of Contents
 - [The GGR Distance Method](#the-ggr-distance-method)
 - [Quick Start](#quick-start)
+- [Dashboard](#dashboard)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [How It Works](#how-it-works)
@@ -107,11 +116,12 @@ Price (Normalized)
 ### 1. Setup
 
 ```bash
-cd ggr-backtesting
+git clone https://github.com/dhrstrijker/ggr-backtest.git
+cd ggr-backtest
 
 # Create virtual environment
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -121,11 +131,13 @@ cp .env.example .env
 # Edit .env and add your Polygon.io API key
 ```
 
-### 2. Run the Notebook
+### 2. Run the Dashboard
 
 ```bash
-jupyter notebook ggr_backtest.ipynb
+python dashboard.py
 ```
+
+Then open http://localhost:8050 in your browser.
 
 ### 3. Run Tests
 
@@ -135,67 +147,104 @@ pytest tests/ -v
 
 ---
 
+## Dashboard
+
+The interactive dashboard provides three main views:
+
+### Fund Overview
+- Performance metrics (annualized return, Sharpe ratio, max drawdown)
+- Cumulative returns chart with SPY benchmark comparison
+- Monthly returns heatmap
+- Active portfolio count over time
+
+### Pairs Summary
+- All pairs ranked by total P&L
+- Trade counts and win rates per pair
+- Click any pair to navigate to the Pair Inspector
+
+### Pair Inspector
+- **Normalized Prices Chart**: GGR Figure 1 style visualization with trade markers
+- **Spread Distance Chart**: Shows distance in σ units with correct per-cycle calculation
+  - Cycle selector to view different portfolio periods
+  - Displays formation σ used for that cycle
+- **Trade History Table**: All trades for the pair across all cycles
+
+---
+
 ## Project Structure
 
 ```
-ggr-backtesting/
+ggr-backtest/
 ├── README.md
 ├── requirements.txt
 ├── .env.example
-├── ggr_backtest.ipynb      # Main notebook (the deliverable)
+├── dashboard.py              # Dashboard entry point
 ├── src/
 │   ├── __init__.py
-│   ├── data.py             # Polygon data fetching + caching + validation
-│   ├── pairs.py            # Pair formation (SSD calculation)
-│   ├── signals.py          # Z-score signals, entry/exit logic
-│   ├── backtest.py         # Backtest engine
-│   └── analysis.py         # Performance metrics + charts
-└── tests/
-    ├── __init__.py
-    ├── test_data_integrity.py  # Data validation tests
-    ├── test_zscore.py          # Z-score calculation tests
-    ├── test_signals.py         # Signal generation tests
-    ├── test_ssd.py             # SSD calculation tests
-    └── test_backtest.py        # Backtest logic tests
+│   ├── data.py               # Polygon.io data fetching + CSV caching
+│   ├── pairs.py              # SSD matrix calculation + pair selection
+│   ├── signals.py            # Formation stats + distance calculation
+│   ├── backtest.py           # Single-pair backtest engine
+│   ├── staggered.py          # Staggered portfolio methodology
+│   └── analysis.py           # Performance metrics + visualization
+├── dashboard/
+│   ├── app.py                # Dash application factory
+│   ├── data_store.py         # Pre-computed backtest results
+│   ├── layouts/              # Page layouts (fund overview, pairs, inspector)
+│   └── callbacks/            # Interactive callbacks
+├── tests/                    # 184 tests covering all methodology details
+│   ├── test_backtest.py
+│   ├── test_staggered.py
+│   ├── test_signals.py
+│   └── ...
+└── data/                     # Cached price data (gitignored)
 ```
 
 ---
 
 ## Configuration
 
-Default parameters in the notebook:
+Default parameters in `dashboard/data_store.py`:
 
 ```python
-CONFIG = {
-    # Universe - stocks to consider for pair formation
-    "symbols": ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'AMD', 'INTC', 'CRM'],
+DEFAULT_CONFIG = {
+    # Universe - tanker stocks for pair formation
+    "symbols": ["DHT", "FRO", "ASC", "ECO", "NAT", "TNK", "INSW", "TRMD", "TOPS", "TORO", "PSHG"],
 
-    # Date range for backtest
-    "start_date": "2022-01-01",
-    "end_date": "2024-12-31",
+    # Date range
+    "start_date": "2021-01-01",
+    "end_date": "2026-01-01",
 
-    # Formation period - how much history to use for pair selection AND σ calculation
-    "formation_days": 252,        # ~1 year of trading days
+    # Staggered methodology parameters
+    "formation_days": 252,        # 12 months - pair selection + σ calculation
+    "trading_days": 126,          # 6 months - active trading period
+    "overlap_days": 21,           # ~1 month between new portfolio starts
+    "n_pairs": 20,                # Top pairs per portfolio cycle
+    "min_data_pct": 0.95,         # Minimum data coverage required
 
-    # Signal parameters (GGR methodology)
-    "entry_threshold": 2.0,       # Enter when |distance| > 2.0σ (from formation)
-    "max_holding_days": 20,       # Force exit after N days (fallback)
-    # Note: Exit occurs when spread crosses zero (GGR rule)
-
-    # Portfolio parameters
-    "top_n_pairs": 5,             # Number of pairs to trade
-    "capital_per_trade": 10000,   # $ allocated per pair trade
+    # Backtest parameters
+    "entry_threshold": 2.0,       # Enter when |distance| > 2.0σ
+    "max_holding_days": 126,      # Force exit after N days (fallback)
+    "capital_per_trade": 10000.0, # $ allocated per pair trade
     "commission": 0.001,          # 0.1% commission per trade
 }
 ```
 
-### Parameter Tuning Guide
+### Staggered Portfolio Parameters
 
-| Parameter | Lower Value | Higher Value |
-|-----------|-------------|--------------|
-| `entry_threshold` | More trades, lower quality signals | Fewer trades, higher conviction |
-| `max_holding_days` | Cut losses faster | Give trades more time to converge |
-| `formation_days` | Recent behavior only, smaller σ | Longer-term relationships, larger σ |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `formation_days` | 252 | Formation period (~12 months) for SSD calculation and σ |
+| `trading_days` | 126 | Trading period (~6 months) per portfolio |
+| `overlap_days` | 21 | Days between portfolio starts (~1 month) |
+| `n_pairs` | 20 | Number of top pairs selected per cycle |
+
+### Execution Modes
+
+| `wait_days` | Execution | Description |
+|-------------|-----------|-------------|
+| 1 (default) | Next-day OPEN | Signal at close, execute at next open (reduces bid-ask bounce) |
+| 0 | Same-day CLOSE | Execute immediately at signal close |
 
 **Note**: Per GGR methodology, exits occur when the spread crosses zero (prices converge), not at an arbitrary threshold.
 
@@ -203,33 +252,44 @@ CONFIG = {
 
 ## How It Works
 
+### Staggered Portfolio Methodology
+
+The implementation follows the GGR paper's staggered approach:
+
+```
+Timeline:
+─────────────────────────────────────────────────────────────────────
+Cycle 0: |── Formation (252d) ──|── Trading (126d) ──|
+Cycle 1:      |── Formation ──────|── Trading ────────|  (starts +21d)
+Cycle 2:           |── Formation ──|── Trading ───────|  (starts +42d)
+...
+─────────────────────────────────────────────────────────────────────
+At steady state: ~6 portfolios active simultaneously
+Monthly return = arithmetic average across active portfolios
+```
+
 ### Data Flow
 
 ```
-Polygon.io API → fetch_prices() → cache (CSV) → get_close_prices()
-                                              → get_open_prices()
-                                                      ↓
-                                              normalize_prices()
-                                                      ↓
-                                            calculate_ssd_matrix()
-                                                      ↓
-                                             select_top_pairs()
-                                                      ↓
-                    ┌─────────────────────────────────────────────────────┐
-                    │  For each pair:                                     │
-                    │    Formation Period:                                │
-                    │      calculate_spread() → calculate_formation_stats()│
-                    │                            (static σ)               │
-                    │    Trading Period:                                  │
-                    │      calculate_spread() → calculate_distance()      │
-                    │      run_backtest_single_pair()                     │
-                    │        - Entry: |distance| > 2σ                     │
-                    │        - Exit: spread crosses zero                  │
-                    └─────────────────────────────────────────────────────┘
-                                                      ↓
-                                            combine_results()
-                                                      ↓
-                                           calculate_metrics()
+Polygon.io API → fetch_or_load() → CSV cache → close_prices / open_prices
+                                                        ↓
+                              generate_portfolio_cycles() (staggered schedule)
+                                                        ↓
+                    ┌───────────────────────────────────────────────────────┐
+                    │  For each cycle:                                      │
+                    │    1. filter_valid_symbols() (min 95% data coverage)  │
+                    │    2. normalize_prices() → calculate_ssd_matrix()     │
+                    │    3. select_top_pairs() (top 20 by SSD)              │
+                    │    4. For each pair:                                  │
+                    │         calculate_formation_stats() → static σ        │
+                    │         run_backtest_single_pair()                    │
+                    │           - Entry: |distance| > 2σ                    │
+                    │           - Exit: spread crosses zero                 │
+                    └───────────────────────────────────────────────────────┘
+                                                        ↓
+                              aggregate_monthly_returns() (arithmetic mean)
+                                                        ↓
+                              calculate_staggered_metrics()
 ```
 
 ### Key Implementation Details
@@ -240,52 +300,65 @@ Polygon.io API → fetch_prices() → cache (CSV) → get_close_prices()
 
 3. **Crossing Zero Exit**: Per the original GGR paper, positions are closed when normalized prices **cross** (spread = 0), not when they reach an arbitrary threshold like |Z| < 0.5.
 
-4. **Data Alignment**: All symbols are aligned to common dates. If one symbol is missing a day, that day is dropped for all symbols.
+4. **Per-Cycle Normalization**: Prices are normalized from the START of each trading period, not from the beginning of all data. This is critical for correct distance calculation.
 
-5. **Commission Model**: Flat percentage commission applied on entry and exit.
+5. **Arithmetic Averaging**: Monthly returns are the simple arithmetic mean across active portfolios, per GGR methodology.
+
+6. **Commission Model**: Flat percentage commission (0.1%) applied on entry and exit.
 
 ---
 
 ## Testing
 
-The test suite validates critical assumptions:
+The test suite (184 tests) validates critical methodology assumptions:
+
+### Backtest Tests (`test_backtest.py`)
+- Trade execution at next-day open (wait_days=1) or same-day close (wait_days=0)
+- P&L calculation correctness
+- Max holding days enforcement
+- Exit reason tracking ("crossing", "max_holding", "end_of_data")
+- Initial divergence handling (trades can open on day 1)
+- Maximum adverse excursion (MAE) tracking
+- Forced liquidation at period end
+
+### Staggered Tests (`test_staggered.py`)
+- Cycle generation with correct window alignment
+- Steady state achieves ~6 active portfolios
+- Arithmetic averaging of returns (not geometric)
+- Per-cycle pair selection
+- Monthly return aggregation
+- Zero interest assumption (uninvested capital earns 0%)
+
+### Signal Tests (`test_signals.py`)
+- Entry triggers when |distance| > 2σ (static from formation)
+- Crossing-zero exit (not arbitrary threshold)
+- Formation statistics calculated correctly
+- Distance calculation uses fixed σ
 
 ### Data Integrity Tests (`test_data_integrity.py`)
 - Gap detection in trading data
 - NaN value detection
-- Zero/negative price detection
-- Extreme price jump detection
-
-### Signal Tests (`test_signals.py`)
-- Entry triggers when |distance| > 2σ (static from formation)
-- **Crossing-zero exit** - exit only when spread crosses zero (GGR rule)
-- No early exit just because spread decreased
-- Formation statistics calculated correctly (static, not rolling)
-- Distance calculation uses fixed σ
-- **Static volatility** - σ doesn't adapt to trading period volatility
-- **Reopening after convergence** - multiple trades per pair allowed
-
-### SSD Tests (`test_ssd.py`)
-- Identical series have SSD = 0
-- SSD is symmetric: SSD(A,B) = SSD(B,A)
-- Different series have SSD > 0
-- **Detailed manual calculation verification**
-- **Formation period isolation** - SSD only uses formation data
-
-### Backtest Tests (`test_backtest.py`)
-- Trade execution happens at next-day open
-- P&L calculation is correct
-- Max holding days is enforced
-- Exit reason correctly identifies "crossing" vs "max_holding"
-- Formation period stats used correctly
-- **Forced liquidation at period end**
-- **Negative spread handling** (long entries)
-- **Multiple pair portfolio tracking**
+- Price validation
 
 Run all tests:
 ```bash
 pytest tests/ -v
+
+# With coverage
+pytest tests/ -v --cov=src
 ```
+
+---
+
+## Key Differences from Other Implementations
+
+| Aspect | GGR Method (this repo) | Common Alternatives |
+|--------|------------------------|---------------------|
+| σ calculation | Static (formation period only) | Rolling window |
+| Exit condition | Spread crosses zero | Arbitrary threshold (e.g., 0.5σ) |
+| Execution | Next-day open | Same-day close |
+| Normalization | Per-trading-period start | Global (data start) |
+| Portfolio | Staggered overlapping | Single portfolio |
 
 ---
 
