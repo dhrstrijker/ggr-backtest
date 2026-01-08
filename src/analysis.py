@@ -709,3 +709,968 @@ def plot_zscore_series(
     )
 
     return fig
+
+
+# =============================================================================
+# Trade Analysis Functions (for ggr_trade_analysis.ipynb)
+# =============================================================================
+
+
+def run_parameter_grid(
+    close_prices: pd.DataFrame,
+    open_prices: pd.DataFrame,
+    pairs: list[tuple[str, str]],
+    entry_thresholds: list[float] | None = None,
+    formation_days_list: list[int] | None = None,
+    max_holding_days: int = 126,
+    capital_per_trade: float = 10000.0,
+    commission: float = 0.001,
+) -> pd.DataFrame:
+    """
+    Run backtest across parameter grid and return performance metrics.
+
+    Args:
+        close_prices: Full close prices DataFrame (will be sliced for formation/trading)
+        open_prices: Full open prices DataFrame
+        pairs: List of pairs to trade
+        entry_thresholds: Entry thresholds to test (default: [1.5, 2.0, 2.5, 3.0])
+        formation_days_list: Formation period lengths to test (default: [126, 189, 252])
+        max_holding_days: Max holding days for config
+        capital_per_trade: Capital per trade for config
+        commission: Commission rate for config
+
+    Returns:
+        DataFrame with columns: entry_threshold, formation_days, sharpe_ratio,
+                               total_return, win_rate, num_trades
+    """
+    from .backtest import run_backtest, BacktestConfig, combine_results
+
+    if entry_thresholds is None:
+        entry_thresholds = [1.5, 2.0, 2.5, 3.0]
+    if formation_days_list is None:
+        formation_days_list = [126, 189, 252]
+
+    results = []
+    total_combinations = len(entry_thresholds) * len(formation_days_list)
+
+    for i, formation_days in enumerate(formation_days_list):
+        # Split data: formation period is the first `formation_days` days
+        # Trading period is the remainder
+        formation_close = close_prices.iloc[:formation_days]
+        trading_close = close_prices.iloc[formation_days:]
+        trading_open = open_prices.iloc[formation_days:]
+
+        if len(trading_close) < 20:
+            print(f"Skipping formation_days={formation_days}: insufficient trading data")
+            continue
+
+        for j, entry_threshold in enumerate(entry_thresholds):
+            combo_num = i * len(entry_thresholds) + j + 1
+            print(f"Running {combo_num}/{total_combinations}: entry_threshold={entry_threshold}, formation_days={formation_days}")
+
+            config = BacktestConfig(
+                entry_threshold=entry_threshold,
+                max_holding_days=max_holding_days,
+                capital_per_trade=capital_per_trade,
+                commission=commission,
+            )
+
+            try:
+                backtest_results = run_backtest(
+                    formation_close=formation_close,
+                    trading_close=trading_close,
+                    trading_open=trading_open,
+                    pairs=pairs,
+                    config=config,
+                )
+
+                all_trades, combined_equity = combine_results(
+                    backtest_results,
+                    initial_capital=capital_per_trade * len(pairs),
+                )
+
+                metrics = calculate_metrics(all_trades, combined_equity)
+
+                results.append({
+                    "entry_threshold": entry_threshold,
+                    "formation_days": formation_days,
+                    "sharpe_ratio": metrics["sharpe_ratio"],
+                    "total_return": metrics["total_return"],
+                    "total_return_pct": metrics["total_return_pct"],
+                    "win_rate": metrics["win_rate"],
+                    "num_trades": metrics["total_trades"],
+                    "max_drawdown_pct": metrics["max_drawdown_pct"],
+                    "profit_factor": metrics["profit_factor"],
+                })
+            except Exception as e:
+                print(f"Error with entry_threshold={entry_threshold}, formation_days={formation_days}: {e}")
+                results.append({
+                    "entry_threshold": entry_threshold,
+                    "formation_days": formation_days,
+                    "sharpe_ratio": 0,
+                    "total_return": 0,
+                    "total_return_pct": 0,
+                    "win_rate": 0,
+                    "num_trades": 0,
+                    "max_drawdown_pct": 0,
+                    "profit_factor": 0,
+                })
+
+    return pd.DataFrame(results)
+
+
+def plot_parameter_heatmap(
+    grid_results: pd.DataFrame,
+    metric: str = "sharpe_ratio",
+    title: str | None = None,
+) -> go.Figure:
+    """
+    Plot parameter sensitivity heatmap.
+
+    Args:
+        grid_results: DataFrame from run_parameter_grid()
+        metric: Column to use for coloring (sharpe_ratio, total_return_pct, win_rate)
+        title: Chart title (auto-generated if None)
+
+    Returns:
+        Plotly Figure with heatmap
+    """
+    # Pivot to matrix form
+    pivot = grid_results.pivot(
+        index="formation_days",
+        columns="entry_threshold",
+        values=metric,
+    )
+
+    # Create annotations with values
+    annotations = []
+    for i, row in enumerate(pivot.index):
+        for j, col in enumerate(pivot.columns):
+            value = pivot.loc[row, col]
+            if metric == "sharpe_ratio":
+                text = f"{value:.2f}"
+            elif metric in ["total_return_pct", "win_rate", "max_drawdown_pct"]:
+                text = f"{value:.1%}"
+            else:
+                text = f"{value:.0f}"
+            annotations.append(
+                dict(
+                    x=col, y=row,
+                    text=text,
+                    showarrow=False,
+                    font=dict(color="white" if abs(value) > 0.5 else "black"),
+                )
+            )
+
+    metric_labels = {
+        "sharpe_ratio": "Sharpe Ratio",
+        "total_return_pct": "Total Return %",
+        "win_rate": "Win Rate",
+        "num_trades": "Number of Trades",
+        "max_drawdown_pct": "Max Drawdown %",
+        "profit_factor": "Profit Factor",
+    }
+
+    if title is None:
+        title = f"Parameter Sensitivity: {metric_labels.get(metric, metric)}"
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot.values,
+            x=pivot.columns,
+            y=pivot.index,
+            colorscale="RdYlGn",
+            hoverongaps=False,
+            colorbar=dict(title=metric_labels.get(metric, metric)),
+        )
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Entry Threshold (σ)",
+        yaxis_title="Formation Period (days)",
+        template="plotly_white",
+        annotations=annotations,
+        height=400,
+        width=600,
+    )
+
+    return fig
+
+
+def calculate_trading_correlation(
+    trading_close: pd.DataFrame,
+    pair: tuple[str, str],
+) -> float:
+    """
+    Calculate correlation between pair's daily returns during trading period.
+
+    Args:
+        trading_close: Trading period close prices
+        pair: Tuple of (symbol_a, symbol_b)
+
+    Returns:
+        Pearson correlation coefficient of daily returns
+    """
+    sym_a, sym_b = pair
+    returns_a = trading_close[sym_a].pct_change().dropna()
+    returns_b = trading_close[sym_b].pct_change().dropna()
+    return returns_a.corr(returns_b)
+
+
+def plot_correlation_scatter(
+    trades_df: pd.DataFrame,
+    formation_correlations: dict[tuple[str, str], float],
+    trading_correlations: dict[tuple[str, str], float],
+    title: str = "Formation vs Trading Correlation by Win/Loss",
+) -> go.Figure:
+    """
+    Scatter plot of formation vs trading correlation colored by trade outcome.
+
+    Args:
+        trades_df: DataFrame of trades with 'pair' and 'pnl' columns
+        formation_correlations: Dict mapping pair -> formation correlation
+        trading_correlations: Dict mapping pair -> trading correlation
+        title: Chart title
+
+    Returns:
+        Plotly scatter figure
+    """
+    # Add correlations to trades
+    data = []
+    for _, trade in trades_df.iterrows():
+        # Parse pair string back to tuple
+        pair_str = trade["pair"]
+        pair_parts = pair_str.split("/")
+        pair = (pair_parts[0], pair_parts[1])
+
+        if pair in formation_correlations and pair in trading_correlations:
+            data.append({
+                "pair": pair_str,
+                "formation_corr": formation_correlations[pair],
+                "trading_corr": trading_correlations[pair],
+                "pnl": trade["pnl"],
+                "outcome": "Winner" if trade["pnl"] > 0 else "Loser",
+            })
+
+    plot_df = pd.DataFrame(data)
+
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="No data available")
+        return fig
+
+    fig = go.Figure()
+
+    # Winners
+    winners = plot_df[plot_df["outcome"] == "Winner"]
+    if not winners.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=winners["formation_corr"],
+                y=winners["trading_corr"],
+                mode="markers",
+                name="Winners",
+                marker=dict(color="green", size=10, opacity=0.7),
+                text=winners["pair"],
+                hovertemplate="Pair: %{text}<br>Formation Corr: %{x:.3f}<br>Trading Corr: %{y:.3f}<br>P&L: $%{customdata:.2f}<extra></extra>",
+                customdata=winners["pnl"],
+            )
+        )
+
+    # Losers
+    losers = plot_df[plot_df["outcome"] == "Loser"]
+    if not losers.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=losers["formation_corr"],
+                y=losers["trading_corr"],
+                mode="markers",
+                name="Losers",
+                marker=dict(color="red", size=10, opacity=0.7),
+                text=losers["pair"],
+                hovertemplate="Pair: %{text}<br>Formation Corr: %{x:.3f}<br>Trading Corr: %{y:.3f}<br>P&L: $%{customdata:.2f}<extra></extra>",
+                customdata=losers["pnl"],
+            )
+        )
+
+    # Diagonal line (correlation unchanged)
+    fig.add_trace(
+        go.Scatter(
+            x=[-1, 1], y=[-1, 1],
+            mode="lines",
+            name="Correlation Unchanged",
+            line=dict(color="gray", dash="dash"),
+        )
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Formation Period Correlation",
+        yaxis_title="Trading Period Correlation",
+        template="plotly_white",
+        height=500,
+        width=600,
+        xaxis=dict(range=[-0.2, 1.1]),
+        yaxis=dict(range=[-0.2, 1.1]),
+    )
+
+    return fig
+
+
+def plot_mae_analysis(
+    trades: list[Trade],
+    title: str = "Maximum Adverse Excursion vs Final P&L",
+) -> go.Figure:
+    """
+    Scatter plot of max adverse spread vs final P&L.
+
+    Args:
+        trades: List of Trade objects (must have max_adverse_spread)
+        title: Chart title
+
+    Returns:
+        Plotly scatter figure
+    """
+    if not trades:
+        fig = go.Figure()
+        fig.update_layout(title="No trades to display")
+        return fig
+
+    # Extract data
+    data = []
+    for t in trades:
+        # Use absolute MAE for visualization (distance from 0)
+        mae = abs(t.max_adverse_spread)
+        data.append({
+            "mae": mae,
+            "pnl": t.pnl,
+            "outcome": "Winner" if t.pnl > 0 else "Loser",
+            "pair": f"{t.pair[0]}/{t.pair[1]}",
+            "entry_distance": abs(t.entry_distance),
+        })
+
+    plot_df = pd.DataFrame(data)
+
+    fig = go.Figure()
+
+    # Winners
+    winners = plot_df[plot_df["outcome"] == "Winner"]
+    if not winners.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=winners["mae"],
+                y=winners["pnl"],
+                mode="markers",
+                name="Winners",
+                marker=dict(color="green", size=10, opacity=0.7),
+                text=winners["pair"],
+                hovertemplate="Pair: %{text}<br>Max Adverse: %{x:.2f}σ<br>P&L: $%{y:.2f}<extra></extra>",
+            )
+        )
+
+    # Losers
+    losers = plot_df[plot_df["outcome"] == "Loser"]
+    if not losers.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=losers["mae"],
+                y=losers["pnl"],
+                mode="markers",
+                name="Losers",
+                marker=dict(color="red", size=10, opacity=0.7),
+                text=losers["pair"],
+                hovertemplate="Pair: %{text}<br>Max Adverse: %{x:.2f}σ<br>P&L: $%{y:.2f}<extra></extra>",
+            )
+        )
+
+    # Zero line
+    fig.add_hline(y=0, line_color="black", line_width=1)
+
+    # Add trendline annotation area markers
+    fig.add_vrect(
+        x0=4, x1=plot_df["mae"].max() + 0.5,
+        fillcolor="red", opacity=0.1,
+        line_width=0,
+        annotation_text="High MAE Zone (falling knives)",
+        annotation_position="top left",
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Maximum Adverse Spread (|σ|)",
+        yaxis_title="Final P&L ($)",
+        template="plotly_white",
+        height=500,
+        width=700,
+    )
+
+    return fig
+
+
+def plot_duration_histogram(
+    trades: list[Trade],
+    title: str = "Holding Duration: Winners vs Losers",
+) -> go.Figure:
+    """
+    Overlayed histograms of holding_days for winners vs losers.
+
+    Args:
+        trades: List of Trade objects
+        title: Chart title
+
+    Returns:
+        Plotly figure with overlayed histograms
+    """
+    if not trades:
+        fig = go.Figure()
+        fig.update_layout(title="No trades to display")
+        return fig
+
+    winners = [t.holding_days for t in trades if t.pnl > 0]
+    losers = [t.holding_days for t in trades if t.pnl <= 0]
+
+    fig = go.Figure()
+
+    if winners:
+        fig.add_trace(
+            go.Histogram(
+                x=winners,
+                name=f"Winners (n={len(winners)})",
+                opacity=0.6,
+                marker_color="green",
+                nbinsx=20,
+            )
+        )
+
+    if losers:
+        fig.add_trace(
+            go.Histogram(
+                x=losers,
+                name=f"Losers (n={len(losers)})",
+                opacity=0.6,
+                marker_color="red",
+                nbinsx=20,
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Holding Days",
+        yaxis_title="Number of Trades",
+        template="plotly_white",
+        barmode="overlay",
+        height=400,
+        width=600,
+    )
+
+    # Add median lines
+    if winners:
+        fig.add_vline(x=np.median(winners), line_dash="dash", line_color="darkgreen",
+                      annotation_text=f"Winner Median: {np.median(winners):.0f}d")
+    if losers:
+        fig.add_vline(x=np.median(losers), line_dash="dash", line_color="darkred",
+                      annotation_text=f"Loser Median: {np.median(losers):.0f}d")
+
+    return fig
+
+
+def plot_ssd_by_outcome(
+    trades_df: pd.DataFrame,
+    pairs_ranking: pd.DataFrame,
+    title: str = "Formation SSD by Trade Outcome",
+) -> go.Figure:
+    """
+    Box plot of SSD values grouped by win/loss.
+
+    Args:
+        trades_df: DataFrame of trades
+        pairs_ranking: DataFrame from rank_all_pairs() with ssd column
+        title: Chart title
+
+    Returns:
+        Plotly box plot figure
+    """
+    # Merge trades with SSD data
+    trades_with_ssd = []
+
+    for _, trade in trades_df.iterrows():
+        pair_str = trade["pair"]
+        pair_parts = pair_str.split("/")
+
+        # Find SSD for this pair
+        ssd_row = pairs_ranking[
+            ((pairs_ranking["symbol_a"] == pair_parts[0]) & (pairs_ranking["symbol_b"] == pair_parts[1])) |
+            ((pairs_ranking["symbol_a"] == pair_parts[1]) & (pairs_ranking["symbol_b"] == pair_parts[0]))
+        ]
+
+        if not ssd_row.empty:
+            trades_with_ssd.append({
+                "ssd": ssd_row["ssd"].values[0],
+                "outcome": "Winner" if trade["pnl"] > 0 else "Loser",
+                "pnl": trade["pnl"],
+            })
+
+    plot_df = pd.DataFrame(trades_with_ssd)
+
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="No data available")
+        return fig
+
+    fig = go.Figure()
+
+    # Winners box
+    winners = plot_df[plot_df["outcome"] == "Winner"]
+    if not winners.empty:
+        fig.add_trace(
+            go.Box(
+                y=winners["ssd"],
+                name=f"Winners (n={len(winners)})",
+                marker_color="green",
+                boxpoints="all",
+                jitter=0.3,
+                pointpos=-1.5,
+            )
+        )
+
+    # Losers box
+    losers = plot_df[plot_df["outcome"] == "Loser"]
+    if not losers.empty:
+        fig.add_trace(
+            go.Box(
+                y=losers["ssd"],
+                name=f"Losers (n={len(losers)})",
+                marker_color="red",
+                boxpoints="all",
+                jitter=0.3,
+                pointpos=-1.5,
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        yaxis_title="Formation Period SSD",
+        template="plotly_white",
+        height=450,
+        width=500,
+    )
+
+    return fig
+
+
+def plot_exit_reason_pie(
+    trades: list[Trade],
+    title: str = "Exit Reason Distribution",
+) -> go.Figure:
+    """
+    Pie chart of exit reasons.
+
+    Args:
+        trades: List of Trade objects
+        title: Chart title
+
+    Returns:
+        Plotly pie chart
+    """
+    if not trades:
+        fig = go.Figure()
+        fig.update_layout(title="No trades to display")
+        return fig
+
+    # Count exit reasons
+    exit_counts = {}
+    for t in trades:
+        reason = t.exit_reason
+        exit_counts[reason] = exit_counts.get(reason, 0) + 1
+
+    labels = list(exit_counts.keys())
+    values = list(exit_counts.values())
+
+    # Color mapping
+    color_map = {
+        "crossing": "green",
+        "max_holding": "orange",
+        "end_of_data": "red",
+    }
+    colors = [color_map.get(l, "gray") for l in labels]
+
+    # Calculate health percentage
+    total = sum(values)
+    crossing_pct = exit_counts.get("crossing", 0) / total * 100 if total > 0 else 0
+    health_text = f"Strategy Health: {crossing_pct:.1f}% Converged"
+
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                marker_colors=colors,
+                textinfo="label+percent",
+                textposition="inside",
+                hovertemplate="Exit Reason: %{label}<br>Count: %{value}<br>Percentage: %{percent}<extra></extra>",
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title=f"{title}<br><sup>{health_text}</sup>",
+        template="plotly_white",
+        height=400,
+        width=500,
+    )
+
+    return fig
+
+
+def plot_pnl_by_exit_reason(
+    trades: list[Trade],
+    title: str = "P&L Distribution by Exit Reason",
+) -> go.Figure:
+    """
+    Violin/box plot of P&L grouped by exit_reason.
+
+    Args:
+        trades: List of Trade objects
+        title: Chart title
+
+    Returns:
+        Plotly violin plot
+    """
+    if not trades:
+        fig = go.Figure()
+        fig.update_layout(title="No trades to display")
+        return fig
+
+    # Group trades by exit reason
+    data = {}
+    for t in trades:
+        reason = t.exit_reason
+        if reason not in data:
+            data[reason] = []
+        data[reason].append(t.pnl)
+
+    # Color mapping
+    color_map = {
+        "crossing": "green",
+        "max_holding": "orange",
+        "end_of_data": "red",
+    }
+
+    fig = go.Figure()
+
+    for reason, pnls in data.items():
+        fig.add_trace(
+            go.Violin(
+                y=pnls,
+                name=f"{reason} (n={len(pnls)})",
+                box_visible=True,
+                meanline_visible=True,
+                line_color=color_map.get(reason, "gray"),
+                fillcolor=color_map.get(reason, "gray"),
+                opacity=0.6,
+            )
+        )
+
+    # Zero line
+    fig.add_hline(y=0, line_color="black", line_width=1)
+
+    # Add summary statistics
+    annotations = []
+    for i, (reason, pnls) in enumerate(data.items()):
+        mean_pnl = np.mean(pnls)
+        annotations.append(
+            dict(
+                x=i, y=max(pnls) + 50,
+                text=f"Avg: ${mean_pnl:.0f}",
+                showarrow=False,
+                font=dict(size=10),
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        yaxis_title="P&L ($)",
+        template="plotly_white",
+        height=450,
+        width=600,
+        showlegend=True,
+        annotations=annotations,
+    )
+
+    return fig
+
+
+# =============================================================================
+# Staggered Portfolio Analysis Functions
+# =============================================================================
+
+
+def calculate_staggered_metrics(
+    result: "StaggeredResult",
+    risk_free_rate: float = 0.02,
+) -> dict[str, Any]:
+    """
+    Calculate performance metrics for staggered portfolio methodology.
+
+    Args:
+        result: StaggeredResult from run_staggered_backtest()
+        risk_free_rate: Annual risk-free rate for Sharpe calculation
+
+    Returns:
+        Dictionary with performance metrics
+    """
+    from .staggered import StaggeredResult
+
+    monthly_returns = result.monthly_returns.dropna()
+
+    if len(monthly_returns) == 0:
+        return {
+            "total_months": 0,
+            "annualized_return": 0,
+            "annualized_volatility": 0,
+            "sharpe_ratio": 0,
+            "max_drawdown": 0,
+            "total_portfolios": result.total_portfolios,
+            "avg_active_portfolios": 0,
+            "total_trades": 0,
+            "avg_monthly_return": 0,
+        }
+
+    # Monthly statistics
+    avg_monthly_return = monthly_returns.mean()
+    monthly_std = monthly_returns.std()
+
+    # Annualized metrics (12 months per year)
+    annualized_return = (1 + avg_monthly_return) ** 12 - 1
+    annualized_volatility = monthly_std * np.sqrt(12)
+
+    # Sharpe ratio (annualized)
+    monthly_rf = risk_free_rate / 12
+    excess_returns = monthly_returns - monthly_rf
+    if monthly_std > 0:
+        sharpe = np.sqrt(12) * excess_returns.mean() / monthly_std
+    else:
+        sharpe = 0
+
+    # Max drawdown from cumulative returns
+    cumulative = (1 + monthly_returns).cumprod()
+    rolling_max = cumulative.expanding().max()
+    drawdown = (cumulative - rolling_max) / rolling_max
+    max_drawdown = drawdown.min()
+
+    # Active portfolios statistics
+    active_counts = result.active_portfolios_over_time.dropna()
+    avg_active = active_counts.mean() if len(active_counts) > 0 else 0
+
+    # Total trades
+    total_trades = len(result.all_trades) if result.all_trades else 0
+
+    # Win rate across all trades
+    if result.all_trades:
+        wins = [t for t in result.all_trades if t.pnl > 0]
+        win_rate = len(wins) / total_trades if total_trades > 0 else 0
+    else:
+        win_rate = 0
+
+    return {
+        "total_months": len(monthly_returns),
+        "avg_monthly_return": avg_monthly_return,
+        "monthly_volatility": monthly_std,
+        "annualized_return": annualized_return,
+        "annualized_volatility": annualized_volatility,
+        "sharpe_ratio": sharpe,
+        "max_drawdown": max_drawdown,
+        "total_portfolios": result.total_portfolios,
+        "avg_active_portfolios": avg_active,
+        "total_trades": total_trades,
+        "win_rate": win_rate,
+    }
+
+
+def print_staggered_metrics(metrics: dict[str, Any]) -> None:
+    """Print formatted staggered backtest metrics."""
+    print("=" * 60)
+    print("STAGGERED PORTFOLIO BACKTEST RESULTS (GGR Methodology)")
+    print("=" * 60)
+    print(f"Total Months:           {metrics['total_months']}")
+    print(f"Total Portfolios:       {metrics['total_portfolios']}")
+    print(f"Avg Active Portfolios:  {metrics['avg_active_portfolios']:.1f}")
+    print("-" * 60)
+    print(f"Avg Monthly Return:     {metrics['avg_monthly_return']:.2%}")
+    print(f"Monthly Volatility:     {metrics['monthly_volatility']:.2%}")
+    print(f"Annualized Return:      {metrics['annualized_return']:.2%}")
+    print(f"Annualized Volatility:  {metrics['annualized_volatility']:.2%}")
+    print(f"Sharpe Ratio:           {metrics['sharpe_ratio']:.2f}")
+    print(f"Max Drawdown:           {metrics['max_drawdown']:.2%}")
+    print("-" * 60)
+    print(f"Total Trades:           {metrics['total_trades']}")
+    print(f"Win Rate:               {metrics['win_rate']:.2%}")
+    print("=" * 60)
+
+
+def plot_staggered_returns(
+    result: "StaggeredResult",
+    title: str = "GGR Staggered Portfolio Performance",
+) -> go.Figure:
+    """
+    Plot cumulative returns with active portfolio count overlay.
+
+    Args:
+        result: StaggeredResult from run_staggered_backtest()
+        title: Chart title
+
+    Returns:
+        Plotly Figure object
+    """
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.5, 0.25, 0.25],
+        vertical_spacing=0.05,
+        subplot_titles=(
+            "Cumulative Returns",
+            "Monthly Returns",
+            "Active Portfolios",
+        ),
+    )
+
+    # Row 1: Cumulative returns
+    cumulative = result.cumulative_returns.dropna()
+    fig.add_trace(
+        go.Scatter(
+            x=cumulative.index,
+            y=cumulative.values * 100,  # Convert to percentage
+            mode="lines",
+            name="Cumulative Return",
+            line=dict(color="blue", width=2),
+        ),
+        row=1, col=1,
+    )
+
+    # Add zero line
+    fig.add_hline(y=0, line_color="black", line_width=1, row=1, col=1)
+
+    # Row 2: Monthly returns bar chart
+    monthly = result.monthly_returns.dropna()
+    colors = ["green" if r >= 0 else "red" for r in monthly.values]
+    fig.add_trace(
+        go.Bar(
+            x=monthly.index,
+            y=monthly.values * 100,  # Convert to percentage
+            name="Monthly Return",
+            marker_color=colors,
+        ),
+        row=2, col=1,
+    )
+    fig.add_hline(y=0, line_color="black", line_width=1, row=2, col=1)
+
+    # Row 3: Active portfolio count
+    active = result.active_portfolios_over_time.dropna()
+    fig.add_trace(
+        go.Scatter(
+            x=active.index,
+            y=active.values,
+            mode="lines+markers",
+            name="Active Portfolios",
+            line=dict(color="purple", width=2),
+            marker=dict(size=4),
+        ),
+        row=3, col=1,
+    )
+
+    # Add target line at 6 portfolios
+    fig.add_hline(
+        y=6, line_dash="dash", line_color="gray",
+        annotation_text="Target: 6 portfolios",
+        row=3, col=1,
+    )
+
+    fig.update_yaxes(title_text="Return (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Return (%)", row=2, col=1)
+    fig.update_yaxes(title_text="Count", row=3, col=1)
+    fig.update_xaxes(title_text="Date", row=3, col=1)
+
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=700,
+        hovermode="x unified",
+        showlegend=False,
+    )
+
+    return fig
+
+
+def plot_portfolio_timeline(
+    result: "StaggeredResult",
+    max_cycles: int = 20,
+    title: str = "Portfolio Cycle Timeline",
+) -> go.Figure:
+    """
+    Gantt-style chart showing portfolio formation/trading periods.
+
+    Args:
+        result: StaggeredResult from run_staggered_backtest()
+        max_cycles: Maximum number of cycles to display
+        title: Chart title
+
+    Returns:
+        Plotly Figure object
+    """
+    cycles = result.cycles[:max_cycles]
+
+    fig = go.Figure()
+
+    for i, cycle in enumerate(cycles):
+        # Formation period bar
+        fig.add_trace(
+            go.Scatter(
+                x=[cycle.formation_start, cycle.formation_end],
+                y=[i, i],
+                mode="lines",
+                line=dict(color="lightblue", width=20),
+                name="Formation" if i == 0 else None,
+                showlegend=(i == 0),
+                hovertemplate=(
+                    f"Cycle {cycle.cycle_id}<br>"
+                    f"Formation: {cycle.formation_start.strftime('%Y-%m-%d')} to {cycle.formation_end.strftime('%Y-%m-%d')}<br>"
+                    f"Pairs: {len(cycle.pairs) if cycle.pairs else 0}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+        # Trading period bar
+        fig.add_trace(
+            go.Scatter(
+                x=[cycle.trading_start, cycle.trading_end],
+                y=[i, i],
+                mode="lines",
+                line=dict(color="green", width=20),
+                name="Trading" if i == 0 else None,
+                showlegend=(i == 0),
+                hovertemplate=(
+                    f"Cycle {cycle.cycle_id}<br>"
+                    f"Trading: {cycle.trading_start.strftime('%Y-%m-%d')} to {cycle.trading_end.strftime('%Y-%m-%d')}<br>"
+                    f"Pairs: {len(cycle.pairs) if cycle.pairs else 0}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title="Portfolio Cycle",
+        template="plotly_white",
+        height=max(400, len(cycles) * 30),
+        yaxis=dict(
+            tickmode="array",
+            tickvals=list(range(len(cycles))),
+            ticktext=[f"Cycle {c.cycle_id}" for c in cycles],
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    return fig

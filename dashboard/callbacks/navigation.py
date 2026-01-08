@@ -4,7 +4,6 @@ from dash import html, callback, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from ..layouts.page1_fund_overview import create_fund_overview_layout
-from ..layouts.page2_live_monitor import create_live_monitor_layout
 from ..layouts.page3_pair_inspector import create_pair_inspector_layout
 from ..layouts.page4_pairs_summary import create_pairs_summary_layout
 
@@ -20,8 +19,6 @@ def register_navigation_callbacks(app, data_store):
         """Render the appropriate page based on URL."""
         if pathname == "/" or pathname == "/overview":
             return create_fund_overview_layout(data_store)
-        elif pathname == "/live":
-            return create_live_monitor_layout(data_store)
         elif pathname == "/summary":
             return create_pairs_summary_layout(data_store)
         elif pathname == "/pairs":
@@ -32,7 +29,6 @@ def register_navigation_callbacks(app, data_store):
 
     @app.callback(
         [Output("nav-overview", "active"),
-         Output("nav-live", "active"),
          Output("nav-summary", "active")],
         Input("url", "pathname"),
     )
@@ -40,7 +36,6 @@ def register_navigation_callbacks(app, data_store):
         """Update which nav item is active."""
         return (
             pathname == "/" or pathname == "/overview",
-            pathname == "/live",
             pathname == "/summary" or pathname == "/pairs",  # Pairs Inspector accessed via Summary
         )
 

@@ -43,6 +43,7 @@ class Trade:
     entry_distance: float  # Distance in σ at entry
     exit_distance: float  # Distance in σ at exit
     exit_reason: str  # 'crossing', 'max_holding', 'end_of_data'
+    max_adverse_spread: float  # Maximum adverse spread (in sigma) during trade
 
     def to_dict(self) -> dict:
         """Convert trade to dictionary."""
@@ -61,6 +62,7 @@ class Trade:
             "entry_distance": self.entry_distance,
             "exit_distance": self.exit_distance,
             "exit_reason": self.exit_reason,
+            "max_adverse_spread": self.max_adverse_spread,
         }
 
 
@@ -173,6 +175,16 @@ def run_backtest_single_pair(
             should_exit = False
             exit_reason = None
 
+            # Track maximum adverse excursion (MAE)
+            if position["direction"] == 1:  # Long spread (entered when spread too low/negative)
+                # Adverse = spread moving even more negative (further from 0)
+                if current_distance < position["max_adverse_distance"]:
+                    position["max_adverse_distance"] = current_distance
+            else:  # Short spread (entered when spread too high/positive)
+                # Adverse = spread moving even more positive (further from 0)
+                if current_distance > position["max_adverse_distance"]:
+                    position["max_adverse_distance"] = current_distance
+
             # Check max holding days (fallback)
             if days_held >= config.max_holding_days:
                 should_exit = True
@@ -239,6 +251,7 @@ def run_backtest_single_pair(
                     entry_distance=position["entry_distance"],
                     exit_distance=current_distance,
                     exit_reason=exit_reason,
+                    max_adverse_spread=position["max_adverse_distance"],
                 )
                 trades.append(trade)
 
@@ -294,6 +307,7 @@ def run_backtest_single_pair(
                     "shares_b": shares_b,
                     "entry_distance": current_distance,
                     "entry_commission": commission,
+                    "max_adverse_distance": current_distance,  # Track MAE
                 }
                 position_entry_idx = entry_idx
 
@@ -343,6 +357,7 @@ def run_backtest_single_pair(
             entry_distance=position["entry_distance"],
             exit_distance=distance.iloc[-1],
             exit_reason="end_of_data",
+            max_adverse_spread=position["max_adverse_distance"],
         )
         trades.append(trade)
         equity[-1] += net_pnl

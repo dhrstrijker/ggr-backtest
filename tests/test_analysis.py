@@ -36,6 +36,7 @@ def create_trade(
         entry_distance=2.5,
         exit_distance=0.1,
         exit_reason="crossing",
+        max_adverse_spread=2.5,  # Same as entry for simple test trades
     )
 
 

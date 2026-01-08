@@ -14,9 +14,9 @@ def create_base_layout(data_store) -> html.Div:
     Returns:
         Base layout component
     """
-    # Get period info for banner
-    formation_info = data_store.get_formation_period_info()
-    trading_info = data_store.get_trading_period_info()
+    # Get backtest info for banner
+    backtest_info = data_store.get_backtest_info()
+    date_info = data_store.get_date_range_info()
 
     return html.Div([
         # URL routing
@@ -44,7 +44,6 @@ def create_base_layout(data_store) -> html.Div:
                 dbc.Collapse(
                     dbc.Nav([
                         dbc.NavItem(dbc.NavLink("Fund Overview", href="/", id="nav-overview")),
-                        dbc.NavItem(dbc.NavLink("Live Monitor", href="/live", id="nav-live")),
                         dbc.NavItem(dbc.NavLink("Pairs Summary", href="/summary", id="nav-summary")),
 
                         # Separator
@@ -72,25 +71,25 @@ def create_base_layout(data_store) -> html.Div:
             className="mb-0",
         ),
 
-        # Rolling window info banner
+        # Staggered methodology info banner
         dbc.Alert(
             [
                 dbc.Row([
                     dbc.Col([
-                        html.Strong("Trading Window: "),
+                        html.Strong("Staggered Methodology: "),
                         html.Span(
-                            f"{trading_info['start'].strftime('%Y-%m-%d')} to "
-                            f"{trading_info['end'].strftime('%Y-%m-%d')}",
+                            f"{backtest_info['total_cycles']} cycles, "
+                            f"{backtest_info['avg_active_portfolios']:.1f} avg active portfolios",
                             className="me-4",
                         ),
-                        html.Strong("Pairs Formed: "),
+                        html.Strong("Data: "),
                         html.Span(
-                            f"{formation_info['start'].strftime('%Y-%m-%d')} to "
-                            f"{formation_info['end'].strftime('%Y-%m-%d')}",
+                            f"{date_info['start'].strftime('%Y-%m-%d')} to "
+                            f"{date_info['end'].strftime('%Y-%m-%d')}",
                             className="me-4",
                         ),
-                        html.Strong("Top Pairs: "),
-                        html.Span(f"{len(data_store.pairs)}"),
+                        html.Strong("Unique Pairs: "),
+                        html.Span(f"{len(data_store.get_all_pairs())}"),
                     ], width=12),
                 ]),
             ],

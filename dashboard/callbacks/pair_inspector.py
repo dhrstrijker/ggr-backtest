@@ -1,4 +1,4 @@
-"""Callbacks for Page 3: Pair Inspector."""
+"""Callbacks for Page 3: Pair Inspector (Staggered Methodology)."""
 
 from urllib.parse import parse_qs
 
@@ -52,17 +52,19 @@ def register_pair_inspector_callbacks(app, data_store):
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get price data
-        prices_a = data_store.trading_prices[sym_a]
-        prices_b = data_store.trading_prices[sym_b]
+        # Get full price data
+        if sym_a not in data_store.close_prices.columns or sym_b not in data_store.close_prices.columns:
+            return go.Figure()
+
+        prices_a = data_store.close_prices[sym_a].dropna()
+        prices_b = data_store.close_prices[sym_b].dropna()
 
         # Normalize prices (base 1.0 = $1 invested)
         norm_a = prices_a / prices_a.iloc[0]
         norm_b = prices_b / prices_b.iloc[0]
 
-        # Get trades for this pair
-        results = data_store.get_results(wait_mode)
-        trades = results[pair].trades if pair in results else []
+        # Get trades for this pair from all cycles
+        trades = data_store.get_trades_for_pair(pair, wait_mode)
 
         # Create figure
         fig = go.Figure()
@@ -104,11 +106,11 @@ def register_pair_inspector_callbacks(app, data_store):
             direction_text = "Long" if trade.direction == 1 else "Short"
 
             # Entry marker (on stock A line)
-            entry_idx = norm_a.index.get_loc(trade.entry_date) if trade.entry_date in norm_a.index else None
-            if entry_idx is not None:
+            if trade.entry_date in norm_a.index:
+                entry_val = norm_a.loc[trade.entry_date]
                 fig.add_trace(go.Scatter(
                     x=[trade.entry_date],
-                    y=[norm_a.iloc[entry_idx]],
+                    y=[entry_val],
                     mode="markers",
                     marker=dict(
                         symbol="triangle-up" if trade.direction == 1 else "triangle-down",
@@ -126,11 +128,11 @@ def register_pair_inspector_callbacks(app, data_store):
                 ))
 
             # Exit marker
-            exit_idx = norm_a.index.get_loc(trade.exit_date) if trade.exit_date in norm_a.index else None
-            if exit_idx is not None:
+            if trade.exit_date in norm_a.index:
+                exit_val = norm_a.loc[trade.exit_date]
                 fig.add_trace(go.Scatter(
                     x=[trade.exit_date],
-                    y=[norm_a.iloc[exit_idx]],
+                    y=[exit_val],
                     mode="markers",
                     marker=dict(
                         symbol="x",
@@ -180,54 +182,48 @@ def register_pair_inspector_callbacks(app, data_store):
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get distance series
-        distance = data_store.distance_series.get(pair)
-        if distance is None:
-            return go.Figure()
-
-        # Get trades
-        results = data_store.get_results(wait_mode)
-        trades = results[pair].trades if pair in results else []
+        # Get trades for this pair
+        trades = data_store.get_trades_for_pair(pair, wait_mode)
 
         # Get entry threshold from config
         entry_threshold = data_store.config.get("entry_threshold", 2.0)
 
+        # Create a simple spread for visualization
+        if sym_a not in data_store.close_prices.columns or sym_b not in data_store.close_prices.columns:
+            return go.Figure()
+
+        prices_a = data_store.close_prices[sym_a].dropna()
+        prices_b = data_store.close_prices[sym_b].dropna()
+
+        # Normalize and calculate spread
+        norm_a = prices_a / prices_a.iloc[0]
+        norm_b = prices_b / prices_b.iloc[0]
+        spread = norm_a - norm_b
+
         # Create figure
         fig = go.Figure()
 
-        # Add threshold bands
-        # Upper entry zone (> 2σ)
-        fig.add_hrect(
-            y0=entry_threshold, y1=distance.max() + 0.5,
-            fillcolor="rgba(233, 79, 55, 0.1)",
-            line_width=0,
-            annotation_text="Entry Zone (Short)",
-            annotation_position="top right",
-        )
-
-        # Lower entry zone (< -2σ)
-        fig.add_hrect(
-            y0=distance.min() - 0.5, y1=-entry_threshold,
-            fillcolor="rgba(46, 134, 171, 0.1)",
-            line_width=0,
-            annotation_text="Entry Zone (Long)",
-            annotation_position="bottom right",
-        )
+        # Add threshold bands (approximate, using a rolling std for visualization)
+        rolling_std = spread.rolling(window=252, min_periods=20).std()
+        upper_band = rolling_std * entry_threshold
+        lower_band = -rolling_std * entry_threshold
 
         # Threshold lines
         fig.add_hline(
             y=entry_threshold,
             line_dash="dash",
             line_color="#E94F37",
-            annotation_text=f"+{entry_threshold}σ",
+            annotation_text=f"+{entry_threshold}σ (approx)",
             annotation_position="right",
+            opacity=0.5,
         )
         fig.add_hline(
             y=-entry_threshold,
             line_dash="dash",
             line_color="#2E86AB",
-            annotation_text=f"-{entry_threshold}σ",
+            annotation_text=f"-{entry_threshold}σ (approx)",
             annotation_position="right",
+            opacity=0.5,
         )
         fig.add_hline(
             y=0,
@@ -238,12 +234,13 @@ def register_pair_inspector_callbacks(app, data_store):
             annotation_position="right",
         )
 
-        # Distance line
+        # Spread line (normalized)
+        spread_normalized = spread / rolling_std.replace(0, 1)
         fig.add_trace(go.Scatter(
-            x=distance.index,
-            y=distance.values,
+            x=spread_normalized.index,
+            y=spread_normalized.values,
             mode="lines",
-            name="Distance",
+            name="Spread Distance (approx)",
             line=dict(color="#4A4A4A", width=1.5),
             hovertemplate="Date: %{x}<br>Distance: %{y:.2f}σ<extra></extra>",
         ))
@@ -253,36 +250,34 @@ def register_pair_inspector_callbacks(app, data_store):
             marker_color = "#2E86AB" if trade.direction == 1 else "#E94F37"
 
             # Entry marker
-            if trade.entry_date in distance.index:
-                fig.add_trace(go.Scatter(
-                    x=[trade.entry_date],
-                    y=[trade.entry_distance],
-                    mode="markers",
-                    marker=dict(
-                        symbol="circle",
-                        size=10,
-                        color=marker_color,
-                        line=dict(width=1, color="white"),
-                    ),
-                    showlegend=False,
-                    hovertemplate=f"<b>ENTRY</b><br>{trade.entry_date.strftime('%Y-%m-%d')}<extra></extra>",
-                ))
+            fig.add_trace(go.Scatter(
+                x=[trade.entry_date],
+                y=[trade.entry_distance],
+                mode="markers",
+                marker=dict(
+                    symbol="circle",
+                    size=10,
+                    color=marker_color,
+                    line=dict(width=1, color="white"),
+                ),
+                showlegend=False,
+                hovertemplate=f"<b>ENTRY</b><br>{trade.entry_date.strftime('%Y-%m-%d')}<br>Distance: {trade.entry_distance:.2f}σ<extra></extra>",
+            ))
 
             # Exit marker
-            if trade.exit_date in distance.index:
-                fig.add_trace(go.Scatter(
-                    x=[trade.exit_date],
-                    y=[trade.exit_distance],
-                    mode="markers",
-                    marker=dict(
-                        symbol="x",
-                        size=10,
-                        color=marker_color,
-                        line=dict(width=2),
-                    ),
-                    showlegend=False,
-                    hovertemplate=f"<b>EXIT</b><br>{trade.exit_date.strftime('%Y-%m-%d')}<extra></extra>",
-                ))
+            fig.add_trace(go.Scatter(
+                x=[trade.exit_date],
+                y=[trade.exit_distance],
+                mode="markers",
+                marker=dict(
+                    symbol="x",
+                    size=10,
+                    color=marker_color,
+                    line=dict(width=2),
+                ),
+                showlegend=False,
+                hovertemplate=f"<b>EXIT</b><br>{trade.exit_date.strftime('%Y-%m-%d')}<br>Distance: {trade.exit_distance:.2f}σ<extra></extra>",
+            ))
 
         # Layout
         fig.update_layout(
@@ -311,19 +306,14 @@ def register_pair_inspector_callbacks(app, data_store):
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get SSD
-        ssd = data_store.ssd_matrix.loc[sym_a, sym_b]
-
-        # Get correlation
-        corr = data_store.pair_correlations.get(pair, 0)
-
-        # Get formation stats
-        form_stats = data_store.formation_stats.get(pair, {})
-        formation_std = form_stats.get("std", 0)
+        # Get aggregated pair stats
+        pair_stats = data_store.pair_stats.get(pair, {})
 
         # Get trades for this pair
-        results = data_store.get_results(wait_mode)
-        trades = results[pair].trades if pair in results else []
+        trades = data_store.get_trades_for_pair(pair, wait_mode)
+
+        # Get cycles where this pair traded
+        cycles_traded = data_store.get_cycles_for_pair(pair, wait_mode)
 
         # Calculate pair-specific metrics
         total_pnl = sum(t.pnl for t in trades)
@@ -332,21 +322,11 @@ def register_pair_inspector_callbacks(app, data_store):
         avg_holding = sum(t.holding_days for t in trades) / len(trades) if trades else 0
 
         return html.Div([
-            html.H6("Formation Period", className="border-bottom pb-2 mb-3"),
+            html.H6("Staggered Stats", className="border-bottom pb-2 mb-3"),
             html.P([
-                html.Strong("SSD: "),
-                f"{ssd:.6f}",
+                html.Strong("Cycles Traded: "),
+                f"{len(cycles_traded)}",
             ], className="mb-1"),
-            html.P([
-                html.Strong("Correlation: "),
-                f"{corr:.4f}",
-            ], className="mb-1"),
-            html.P([
-                html.Strong("Formation σ: "),
-                f"{formation_std:.6f}",
-            ], className="mb-3"),
-
-            html.H6("Trading Period", className="border-bottom pb-2 mb-3"),
             html.P([
                 html.Strong("Total Trades: "),
                 str(len(trades)),
@@ -367,15 +347,11 @@ def register_pair_inspector_callbacks(app, data_store):
                 f"{avg_holding:.1f} days",
             ], className="mb-3"),
 
-            html.H6("Sector", className="border-bottom pb-2 mb-3"),
-            html.P([
-                html.Strong(f"{sym_a}: "),
-                "Tanker Shipping",
-            ], className="mb-1 small"),
-            html.P([
-                html.Strong(f"{sym_b}: "),
-                "Tanker Shipping",
-            ], className="mb-1 small"),
+            html.H6("Cycle IDs", className="border-bottom pb-2 mb-3"),
+            html.P(
+                ", ".join(str(c) for c in cycles_traded[:10]) + ("..." if len(cycles_traded) > 10 else ""),
+                className="small text-muted",
+            ) if cycles_traded else html.P("None", className="text-muted small"),
         ])
 
     @app.callback(
@@ -384,7 +360,7 @@ def register_pair_inspector_callbacks(app, data_store):
          Input("wait-mode-store", "data")],
     )
     def update_trades_table(pair_value, wait_mode):
-        """Update the trade history table."""
+        """Update the trade history table (showing all trades across cycles)."""
         if not pair_value:
             return html.P("No pair selected", className="text-muted")
 
@@ -392,12 +368,11 @@ def register_pair_inspector_callbacks(app, data_store):
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get trades
-        results = data_store.get_results(wait_mode)
-        trades = results[pair].trades if pair in results else []
+        # Get trades from all cycles
+        trades = data_store.get_trades_for_pair(pair, wait_mode)
 
         if not trades:
-            return html.P("No trades for this pair", className="text-muted")
+            return html.P("No trades for this pair across all cycles", className="text-muted")
 
         # Build table rows
         rows = []

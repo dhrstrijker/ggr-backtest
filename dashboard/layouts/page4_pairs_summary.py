@@ -1,4 +1,4 @@
-"""Page 4: Pairs Summary layout."""
+"""Page 4: Pairs Summary layout (Staggered Methodology)."""
 
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
@@ -8,17 +8,19 @@ from .base import create_page_header
 
 def create_pairs_summary_layout(data_store) -> html.Div:
     """
-    Create the Pairs Summary page layout.
+    Create the Pairs Summary page layout for staggered methodology.
 
     Displays:
-    - Table with all pairs, their P&L, number of trades
-    - Clicking a row navigates to Pair Inspector for that pair
+    - Table with all pairs from all cycles, aggregated metrics
+    - Number of cycles each pair was selected
+    - Total P&L, win rate, average holding period
+    - Clicking "Inspect" navigates to Pair Inspector for that pair
     """
     return html.Div([
         # Page header
         create_page_header(
             "Pairs Summary",
-            "Overview of all trading pairs - Click a row to inspect"
+            "Aggregated performance across all portfolio cycles"
         ),
 
         dbc.Row([
@@ -27,7 +29,7 @@ def create_pairs_summary_layout(data_store) -> html.Div:
                     dbc.CardHeader([
                         html.H5("All Pairs Performance", className="mb-0 d-inline"),
                         html.Span(
-                            " (Click row to inspect pair)",
+                            " (Aggregated across all cycles)",
                             className="text-muted small ms-2",
                         ),
                     ]),

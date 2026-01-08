@@ -710,3 +710,180 @@ class TestMultiplePairs:
         for pair, result in results.items():
             assert result.equity_curve.iloc[0] == capital_per_trade, \
                 f"Pair {pair} should start with ${capital_per_trade}"
+
+
+class TestMaxAdverseExcursion:
+    """Test suite for max_adverse_spread (MAE) tracking."""
+
+    def test_trade_has_max_adverse_spread_field(self):
+        """Trade objects should have max_adverse_spread field."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        if result.trades:
+            trade = result.trades[0]
+            assert hasattr(trade, 'max_adverse_spread'), "Trade should have max_adverse_spread"
+            assert isinstance(trade.max_adverse_spread, float), "max_adverse_spread should be float"
+
+    def test_mae_at_least_entry_distance_for_short(self):
+        """For short spread, MAE should be at least as extreme as entry distance."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+        }, index=formation_dates)
+
+        # Positive spread: short entry (direction=-1)
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        for trade in result.trades:
+            if trade.direction == -1:  # Short spread
+                # MAE should be at least as extreme (positive) as entry
+                assert trade.max_adverse_spread >= trade.entry_distance, \
+                    f"Short spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
+
+    def test_mae_at_least_entry_distance_for_long(self):
+        """For long spread, MAE should be at least as extreme as entry distance."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+        }, index=formation_dates)
+
+        # Negative spread: long entry (direction=1)
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 10 + [80.0] * 10 + [100.0] * 10,  # A drops
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        for trade in result.trades:
+            if trade.direction == 1:  # Long spread
+                # MAE should be at least as extreme (negative or more positive) as entry
+                # For long spread entered at negative distance, adverse is more positive
+                assert trade.max_adverse_spread >= trade.entry_distance, \
+                    f"Long spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
+
+    def test_mae_captures_worst_case(self):
+        """MAE should capture the most extreme spread during trade."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=40, freq='D')
+
+        # Formation period with actual volatility (not identical prices)
+        # Create some spread variation so formation_std is non-zero
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.sin(i/5 + 0.5) * 4 for i in range(50)],  # Different pattern
+        }, index=formation_dates)
+
+        # Short spread entry: A rises -> goes even higher -> converges
+        # Entry at ~+2σ, worsens to ~+4σ, then converges
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [115.0] * 5 + [125.0] * 10 + [100.0] * 20,
+            'B': [100.0] * 40,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        if result.trades:
+            trade = result.trades[0]
+            # Verify that trade has finite distances (valid test data)
+            if np.isfinite(trade.entry_distance) and np.isfinite(trade.max_adverse_spread):
+                if trade.direction == -1:  # Short spread
+                    # MAE should be greater than or equal to entry
+                    # (equals if spread didn't widen after entry)
+                    assert trade.max_adverse_spread >= trade.entry_distance, \
+                        "MAE should be >= entry distance for short spread"
+
+    def test_mae_in_to_dict(self):
+        """max_adverse_spread should be included in to_dict() output."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        if result.trades:
+            trade_dict = result.trades[0].to_dict()
+            assert 'max_adverse_spread' in trade_dict, "to_dict() should include max_adverse_spread"

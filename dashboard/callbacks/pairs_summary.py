@@ -1,6 +1,4 @@
-"""Callbacks for Page 4: Pairs Summary."""
-
-from itertools import combinations
+"""Callbacks for Page 4: Pairs Summary (Staggered Methodology)."""
 
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
@@ -16,96 +14,81 @@ def register_pairs_summary_callbacks(app, data_store):
         Input("wait-mode-store", "data"),
     )
     def update_pairs_table(wait_mode):
-        """Build the pairs summary table with all pairs ranked by SSD."""
-        results = data_store.get_results(wait_mode)
-        top_pairs_set = set(data_store.pairs)
+        """Build the pairs summary table showing all pairs across all cycles."""
+        # Get all unique pairs from all cycles
+        all_pairs = data_store.get_all_pairs()
 
-        # Get all symbols and generate all pairs
-        symbols = data_store.ssd_matrix.columns.tolist()
-        all_pairs = list(combinations(symbols, 2))
+        if not all_pairs:
+            return html.P("No pairs found in backtest results", className="text-muted")
 
-        # Calculate SSD for all pairs and sort by SSD
-        pairs_with_ssd = []
-        for sym_a, sym_b in all_pairs:
-            ssd = data_store.ssd_matrix.loc[sym_a, sym_b]
-            pairs_with_ssd.append(((sym_a, sym_b), ssd))
+        # Build stats for each pair for the current wait mode
+        pairs_data = []
+        for pair in all_pairs:
+            trades = data_store.get_trades_for_pair(pair, wait_mode)
+            cycles = data_store.get_cycles_for_pair(pair, wait_mode)
 
-        # Sort by SSD ascending (best pairs first)
-        pairs_with_ssd.sort(key=lambda x: x[1])
+            total_pnl = sum(t.pnl for t in trades)
+            num_trades = len(trades)
+            win_count = sum(1 for t in trades if t.pnl > 0)
+            win_rate = (win_count / num_trades * 100) if num_trades > 0 else 0
+            avg_pnl = total_pnl / num_trades if num_trades > 0 else 0
+            avg_holding = sum(t.holding_days for t in trades) / num_trades if num_trades > 0 else 0
 
+            pairs_data.append({
+                "pair": pair,
+                "cycles_traded": len(cycles),
+                "num_trades": num_trades,
+                "win_rate": win_rate,
+                "total_pnl": total_pnl,
+                "avg_pnl": avg_pnl,
+                "avg_holding": avg_holding,
+            })
+
+        # Sort by total P&L descending
+        pairs_data.sort(key=lambda x: x["total_pnl"], reverse=True)
+
+        # Build table rows
         rows = []
-        for rank, (pair, ssd) in enumerate(pairs_with_ssd, 1):
-            sym_a, sym_b = pair
+        for rank, data in enumerate(pairs_data, 1):
+            sym_a, sym_b = data["pair"]
             pair_key = f"{sym_a}_{sym_b}"
-            is_top_pair = pair in top_pairs_set
 
-            # Calculate correlation from formation prices
-            corr = data_store.formation_prices[sym_a].corr(data_store.formation_prices[sym_b])
+            pnl_color = "text-success" if data["total_pnl"] >= 0 else "text-danger"
+            avg_pnl_color = "text-success" if data["avg_pnl"] >= 0 else "text-danger"
 
-            if is_top_pair:
-                # Full data for top pairs
-                trades = results[pair].trades if pair in results else []
-                total_pnl = sum(t.pnl for t in trades)
-                num_trades = len(trades)
-                win_count = sum(1 for t in trades if t.pnl > 0)
-                win_rate = (win_count / num_trades * 100) if num_trades > 0 else 0
-                avg_pnl = total_pnl / num_trades if num_trades > 0 else 0
-
-                pnl_color = "text-success" if total_pnl >= 0 else "text-danger"
-                avg_pnl_color = "text-success" if avg_pnl >= 0 else "text-danger"
-
-                rows.append(
-                    html.Tr(
-                        [
-                            html.Td(str(rank)),
-                            html.Td(html.Strong(f"{sym_a} / {sym_b}")),
-                            html.Td(f"{ssd:.6f}"),
-                            html.Td(f"{corr:.4f}"),
-                            html.Td(str(num_trades), className="text-center"),
-                            html.Td(f"{win_rate:.1f}%", className="text-center"),
-                            html.Td(
-                                html.Span(format_currency(total_pnl), className=pnl_color),
-                                className="text-end",
-                            ),
-                            html.Td(
-                                html.Span(format_currency(avg_pnl), className=avg_pnl_color),
-                                className="text-end",
-                            ),
-                            html.Td(
-                                dcc.Link(
-                                    dbc.Button(
-                                        "Inspect",
-                                        color="primary",
-                                        size="sm",
-                                        className="py-0",
-                                    ),
-                                    href=f"/pairs?pair={pair_key}",
+            rows.append(
+                html.Tr(
+                    [
+                        html.Td(str(rank)),
+                        html.Td(html.Strong(f"{sym_a} / {sym_b}")),
+                        html.Td(str(data["cycles_traded"]), className="text-center"),
+                        html.Td(str(data["num_trades"]), className="text-center"),
+                        html.Td(f"{data['win_rate']:.1f}%", className="text-center"),
+                        html.Td(f"{data['avg_holding']:.0f}", className="text-center"),
+                        html.Td(
+                            html.Span(format_currency(data["total_pnl"]), className=pnl_color),
+                            className="text-end",
+                        ),
+                        html.Td(
+                            html.Span(format_currency(data["avg_pnl"]), className=avg_pnl_color),
+                            className="text-end",
+                        ),
+                        html.Td(
+                            dcc.Link(
+                                dbc.Button(
+                                    "Inspect",
+                                    color="primary",
+                                    size="sm",
+                                    className="py-0",
                                 ),
-                                className="text-center",
+                                href=f"/pairs?pair={pair_key}",
                             ),
-                        ],
-                        className="align-middle",
-                    )
+                            className="text-center",
+                        ),
+                    ],
+                    className="align-middle",
                 )
-            else:
-                # Greyed out row for non-top pairs
-                rows.append(
-                    html.Tr(
-                        [
-                            html.Td(str(rank)),
-                            html.Td(f"{sym_a} / {sym_b}"),
-                            html.Td(f"{ssd:.6f}"),
-                            html.Td(f"{corr:.4f}"),
-                            html.Td("—", className="text-center"),
-                            html.Td("—", className="text-center"),
-                            html.Td("—", className="text-end"),
-                            html.Td("—", className="text-end"),
-                            html.Td("", className="text-center"),
-                        ],
-                        className="align-middle text-muted",
-                        style={"opacity": "0.5"},
-                    )
-                )
+            )
 
         return dbc.Table(
             [
@@ -113,10 +96,10 @@ def register_pairs_summary_callbacks(app, data_store):
                     html.Tr([
                         html.Th("#", style={"width": "40px"}),
                         html.Th("Pair"),
-                        html.Th("SSD"),
-                        html.Th("Correlation"),
+                        html.Th("Cycles", className="text-center", title="Number of portfolio cycles this pair was selected"),
                         html.Th("Trades", className="text-center"),
                         html.Th("Win Rate", className="text-center"),
+                        html.Th("Avg Days", className="text-center", title="Average holding days"),
                         html.Th("Total P&L", className="text-end"),
                         html.Th("Avg P&L", className="text-end"),
                         html.Th("Action", className="text-center", style={"width": "80px"}),

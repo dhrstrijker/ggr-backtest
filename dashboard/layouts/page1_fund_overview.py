@@ -1,4 +1,4 @@
-"""Page 1: Fund Overview layout."""
+"""Page 1: Fund Overview layout for staggered methodology."""
 
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -9,68 +9,75 @@ from .base import create_page_header
 
 def create_fund_overview_layout(data_store) -> html.Div:
     """
-    Create the Fund Overview page layout.
+    Create the Fund Overview page layout for staggered methodology.
 
     Displays:
-    - Header metrics (Total Return, YTD vs SPY, Active Pairs, Capital Usage)
-    - Committed/Fully Invested toggle
-    - Equity curve chart with SPY overlay
+    - Header metrics (Annualized Return, Sharpe Ratio, Active Portfolios, Total Trades)
+    - Cumulative returns chart (monthly)
+    - Monthly returns bar chart
     - Risk metrics table
+    - Trade Statistics table
     """
     return html.Div([
         # Page header
         create_page_header(
             "Fund Overview",
-            "Strategy Performance vs Benchmark"
+            "GGR Staggered Portfolio Performance"
         ),
 
         # Header metrics row
         dbc.Row([
-            dbc.Col(create_metric_card("Total Return", "total-return-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("YTD Return", "ytd-return-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("Active Pairs", "active-pairs-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("Capital Usage", "capital-usage-metric"), md=3, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Annualized Return", "annualized-return-metric"), md=3, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Sharpe Ratio", "sharpe-ratio-metric"), md=3, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Avg Active Portfolios", "active-portfolios-metric"), md=3, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Total Trades", "total-trades-metric"), md=3, sm=6, className="mb-3"),
         ], className="mb-4"),
 
-        # Return calculation toggle and mode indicator
+        # Mode indicator row
         dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
                         dbc.Row([
                             dbc.Col([
-                                html.Label("Return Calculation:", className="me-3 fw-bold"),
-                                dbc.RadioItems(
-                                    id="return-calc-toggle",
-                                    options=[
-                                        {"label": "Committed Capital", "value": "committed"},
-                                        {"label": "Fully Invested", "value": "fully_invested"},
-                                    ],
-                                    value="committed",
-                                    inline=True,
-                                ),
-                            ], md=6),
-                            dbc.Col([
-                                html.Div(id="current-mode-indicator", className="text-end"),
-                            ], md=6),
+                                html.Div(id="current-mode-indicator"),
+                            ], width=12),
                         ]),
                     ], className="py-2"),
                 ], className="mb-4"),
             ], width=12),
         ]),
 
-        # Main equity curve chart
+        # Cumulative returns chart
         dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader([
-                        html.H5("Equity Curve: GGR Strategy vs S&P 500", className="mb-0"),
+                        html.H5("Cumulative Returns (Monthly)", className="mb-0"),
                     ]),
                     dbc.CardBody([
                         dcc.Graph(
                             id="equity-curve-chart",
                             config={"displayModeBar": True, "scrollZoom": True},
-                            style={"height": "450px"},
+                            style={"height": "400px"},
+                        ),
+                    ]),
+                ]),
+            ], width=12),
+        ], className="mb-4"),
+
+        # Monthly returns bar chart
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.H5("Monthly Returns", className="mb-0"),
+                    ]),
+                    dbc.CardBody([
+                        dcc.Graph(
+                            id="monthly-returns-chart",
+                            config={"displayModeBar": True},
+                            style={"height": "250px"},
                         ),
                     ]),
                 ]),
