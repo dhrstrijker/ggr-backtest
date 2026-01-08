@@ -74,11 +74,24 @@ def create_pair_inspector_layout(data_store) -> html.Div:
                 # Chart B: Distance with bands
                 dbc.Card([
                     dbc.CardHeader([
-                        html.H5("Spread Distance", className="mb-0 d-inline"),
-                        html.Span(
-                            " (Entry at ±2σ, Exit at 0)",
-                            className="text-muted small ms-2",
-                        ),
+                        html.Div([
+                            html.Div([
+                                html.H5("Spread Distance", className="mb-0 d-inline"),
+                                html.Span(
+                                    " (Entry at ±2σ, Exit at 0)",
+                                    className="text-muted small ms-2",
+                                ),
+                            ], className="d-inline-block"),
+                            html.Div([
+                                html.Label("Cycle:", className="me-2 small"),
+                                dcc.Dropdown(
+                                    id="cycle-selector",
+                                    placeholder="Select cycle...",
+                                    clearable=False,
+                                    style={"width": "280px", "display": "inline-block"},
+                                ),
+                            ], className="d-inline-flex align-items-center float-end"),
+                        ], className="d-flex justify-content-between align-items-center"),
                     ]),
                     dbc.CardBody([
                         dcc.Graph(

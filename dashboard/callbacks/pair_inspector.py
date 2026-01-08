@@ -7,6 +7,7 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import pandas as pd
 
+from src.signals import calculate_spread, calculate_formation_stats, calculate_distance
 from ..components.metrics_card import format_currency, format_percentage
 
 
@@ -169,61 +170,121 @@ def register_pair_inspector_callbacks(app, data_store):
         return fig
 
     @app.callback(
-        Output("spread-distance-chart", "figure"),
+        [Output("cycle-selector", "options"),
+         Output("cycle-selector", "value")],
         [Input("current-pair", "data"),
          Input("wait-mode-store", "data")],
     )
-    def update_distance_chart(pair_value, wait_mode):
-        """Update the distance chart with entry/exit threshold bands."""
+    def populate_cycle_selector(pair_value, wait_mode):
+        """Populate the cycle selector with cycles that include this pair."""
         if not pair_value:
+            return [], None
+
+        sym_a, sym_b = pair_value.split("_")
+        pair = (sym_a, sym_b)
+
+        # Get staggered result
+        result = data_store.get_staggered_result(wait_mode)
+        if not result:
+            return [], None
+
+        # Find cycles that include this pair
+        options = []
+        for cycle in result.cycles:
+            if cycle.pairs and pair in cycle.pairs:
+                label = (
+                    f"Cycle {cycle.cycle_id}: "
+                    f"{cycle.trading_start.strftime('%Y-%m-%d')} to "
+                    f"{cycle.trading_end.strftime('%Y-%m-%d')}"
+                )
+                options.append({"label": label, "value": cycle.cycle_id})
+
+        # Default to most recent cycle
+        default_value = options[-1]["value"] if options else None
+
+        return options, default_value
+
+    @app.callback(
+        Output("spread-distance-chart", "figure"),
+        [Input("current-pair", "data"),
+         Input("wait-mode-store", "data"),
+         Input("cycle-selector", "value")],
+    )
+    def update_distance_chart(pair_value, wait_mode, selected_cycle_id):
+        """Update the distance chart with CORRECT GGR methodology.
+
+        Uses static formation σ and normalizes from trading period start,
+        matching the actual backtest calculation.
+        """
+        if not pair_value or selected_cycle_id is None:
             return go.Figure()
 
         # Parse pair
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get trades for this pair
-        trades = data_store.get_trades_for_pair(pair, wait_mode)
+        # Get the selected cycle
+        result = data_store.get_staggered_result(wait_mode)
+        if not result:
+            return go.Figure()
+
+        cycle = None
+        for c in result.cycles:
+            if c.cycle_id == selected_cycle_id:
+                cycle = c
+                break
+
+        if not cycle or not cycle.pairs or pair not in cycle.pairs:
+            return go.Figure()
 
         # Get entry threshold from config
         entry_threshold = data_store.config.get("entry_threshold", 2.0)
 
-        # Create a simple spread for visualization
+        # Check symbols exist
         if sym_a not in data_store.close_prices.columns or sym_b not in data_store.close_prices.columns:
             return go.Figure()
 
-        prices_a = data_store.close_prices[sym_a].dropna()
-        prices_b = data_store.close_prices[sym_b].dropna()
+        # === CORRECT GGR CALCULATION ===
+        # 1. Get formation period data and calculate STATIC formation σ
+        formation_close_a = data_store.close_prices[sym_a].loc[cycle.formation_start:cycle.formation_end]
+        formation_close_b = data_store.close_prices[sym_b].loc[cycle.formation_start:cycle.formation_end]
+        formation_spread = calculate_spread(formation_close_a, formation_close_b, normalize=True)
+        formation_stats = calculate_formation_stats(formation_spread)
+        formation_std = formation_stats['std']
 
-        # Normalize and calculate spread
-        norm_a = prices_a / prices_a.iloc[0]
-        norm_b = prices_b / prices_b.iloc[0]
-        spread = norm_a - norm_b
+        # 2. Get trading period data and calculate distance using STATIC σ
+        trading_close_a = data_store.close_prices[sym_a].loc[cycle.trading_start:cycle.trading_end]
+        trading_close_b = data_store.close_prices[sym_b].loc[cycle.trading_start:cycle.trading_end]
+        trading_spread = calculate_spread(trading_close_a, trading_close_b, normalize=True)
+        distance = calculate_distance(trading_spread, formation_std)
+
+        # Get trades for this pair in this cycle
+        all_trades = data_store.get_trades_for_pair(pair, wait_mode)
+        # Filter to trades within this cycle's trading period
+        cycle_trades = [
+            t for t in all_trades
+            if cycle.trading_start <= t.entry_date <= cycle.trading_end
+        ]
 
         # Create figure
         fig = go.Figure()
-
-        # Add threshold bands (approximate, using a rolling std for visualization)
-        rolling_std = spread.rolling(window=252, min_periods=20).std()
-        upper_band = rolling_std * entry_threshold
-        lower_band = -rolling_std * entry_threshold
 
         # Threshold lines
         fig.add_hline(
             y=entry_threshold,
             line_dash="dash",
             line_color="#E94F37",
-            annotation_text=f"+{entry_threshold}σ (approx)",
+            annotation_text=f"+{entry_threshold}σ",
             annotation_position="right",
-            opacity=0.5,
+            opacity=0.7,
         )
         fig.add_hline(
             y=-entry_threshold,
             line_dash="dash",
             line_color="#2E86AB",
-            annotation_text=f"-{entry_threshold}σ (approx)",
+            annotation_text=f"-{entry_threshold}σ",
             annotation_position="right",
-            opacity=0.5,
+            opacity=0.7,
         )
         fig.add_hline(
             y=0,
@@ -234,19 +295,18 @@ def register_pair_inspector_callbacks(app, data_store):
             annotation_position="right",
         )
 
-        # Spread line (normalized)
-        spread_normalized = spread / rolling_std.replace(0, 1)
+        # Distance line (using correct GGR calculation)
         fig.add_trace(go.Scatter(
-            x=spread_normalized.index,
-            y=spread_normalized.values,
+            x=distance.index,
+            y=distance.values,
             mode="lines",
-            name="Spread Distance (approx)",
+            name="Spread Distance",
             line=dict(color="#4A4A4A", width=1.5),
             hovertemplate="Date: %{x}<br>Distance: %{y:.2f}σ<extra></extra>",
         ))
 
-        # Add trade markers
-        for trade in trades:
+        # Add trade markers for this cycle
+        for trade in cycle_trades:
             marker_color = "#2E86AB" if trade.direction == 1 else "#E94F37"
 
             # Entry marker
@@ -279,15 +339,21 @@ def register_pair_inspector_callbacks(app, data_store):
                 hovertemplate=f"<b>EXIT</b><br>{trade.exit_date.strftime('%Y-%m-%d')}<br>Distance: {trade.exit_distance:.2f}σ<extra></extra>",
             ))
 
-        # Layout
+        # Layout with info about formation σ
         fig.update_layout(
             template="plotly_white",
             hovermode="x unified",
             showlegend=False,
-            margin=dict(l=50, r=80, t=20, b=50),
+            margin=dict(l=50, r=80, t=30, b=50),
             xaxis_title="Date",
             yaxis_title="Distance (σ)",
             yaxis_zeroline=True,
+            title=dict(
+                text=f"Formation σ = {formation_std:.4f}",
+                font=dict(size=11, color="gray"),
+                x=0.02,
+                y=0.98,
+            ),
         )
 
         return fig
