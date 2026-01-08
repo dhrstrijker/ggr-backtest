@@ -10,6 +10,7 @@ sys.path.insert(0, '.')
 import os
 import pandas as pd
 import requests
+import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 
@@ -166,32 +167,41 @@ def main():
 
 def create_timeline_chart(availability):
     """Create a Gantt-style timeline chart."""
-    fig = go.Figure()
-
-    # Sort by first date
-    availability.sort(key=lambda x: x['first_date'] if x['first_date'] else pd.Timestamp.max)
-
-    colors = ['#2ecc71' if a['coverage'] >= 90 else '#f39c12' if a['coverage'] >= 70 else '#e74c3c'
-              for a in availability]
-
-    for i, a in enumerate(availability):
+    # Build data for timeline
+    timeline_data = []
+    for a in availability:
         if a['first_date'] and a['last_date']:
-            fig.add_trace(go.Bar(
-                x=[(a['last_date'] - a['first_date']).days],
-                y=[a['symbol']],
-                base=[a['first_date']],
-                orientation='h',
-                marker_color=colors[i],
-                text=f"{a['trading_days']} days ({a['coverage']:.0f}%)",
-                textposition='inside',
-                hovertemplate=f"<b>{a['symbol']}</b><br>" +
-                              f"Start: {a['first_date'].date()}<br>" +
-                              f"End: {a['last_date'].date()}<br>" +
-                              f"Days: {a['trading_days']}<br>" +
-                              f"Coverage: {a['coverage']:.1f}%<extra></extra>"
-            ))
+            coverage_cat = 'Full (≥90%)' if a['coverage'] >= 90 else 'Partial (70-90%)' if a['coverage'] >= 70 else 'Limited (<70%)'
+            timeline_data.append({
+                'Symbol': a['symbol'],
+                'Start': a['first_date'],
+                'End': a['last_date'],
+                'Days': a['trading_days'],
+                'Coverage': f"{a['coverage']:.0f}%",
+                'Coverage Category': coverage_cat,
+            })
 
-    # Add vertical lines for common range
+    df = pd.DataFrame(timeline_data)
+
+    # Create timeline using plotly express
+    color_map = {
+        'Full (≥90%)': '#2ecc71',
+        'Partial (70-90%)': '#f39c12',
+        'Limited (<70%)': '#e74c3c'
+    }
+
+    fig = px.timeline(
+        df,
+        x_start='Start',
+        x_end='End',
+        y='Symbol',
+        color='Coverage Category',
+        color_discrete_map=color_map,
+        hover_data=['Days', 'Coverage'],
+        title="Data Availability Timeline by Symbol"
+    )
+
+    # Add vertical lines for aligned range
     first_dates = [a['first_date'] for a in availability if a['first_date']]
     last_dates = [a['last_date'] for a in availability if a['last_date']]
 
@@ -199,28 +209,39 @@ def create_timeline_chart(availability):
         common_start = max(first_dates)
         common_end = min(last_dates)
 
-        fig.add_shape(type="line", x0=common_start, x1=common_start,
-                      y0=-0.5, y1=len(availability) - 0.5,
-                      line=dict(color="red", width=2, dash="dash"))
-        fig.add_shape(type="line", x0=common_end, x1=common_end,
-                      y0=-0.5, y1=len(availability) - 0.5,
-                      line=dict(color="red", width=2, dash="dash"))
+        # Add vertical lines using shapes (more reliable with dates)
+        fig.add_shape(
+            type="line",
+            x0=common_start, x1=common_start,
+            y0=0, y1=1, yref="paper",
+            line=dict(color="red", width=2, dash="dash")
+        )
+        fig.add_shape(
+            type="line",
+            x0=common_end, x1=common_end,
+            y0=0, y1=1, yref="paper",
+            line=dict(color="blue", width=2, dash="dash")
+        )
 
-        fig.add_annotation(x=common_start, y=len(availability),
-                           text=f"Aligned Start: {common_start.date()}", showarrow=False,
-                           font=dict(color="red"))
+        # Add annotations separately
+        fig.add_annotation(
+            x=common_start, y=1.05, yref="paper",
+            text=f"Aligned Start: {common_start.date()}",
+            showarrow=False, font=dict(color="red", size=10)
+        )
+        fig.add_annotation(
+            x=common_end, y=1.05, yref="paper",
+            text=f"Aligned End: {common_end.date()}",
+            showarrow=False, font=dict(color="blue", size=10)
+        )
 
     fig.update_layout(
-        title="Data Availability Timeline by Symbol<br><sup>Red lines = aligned date range used for backtest</sup>",
         xaxis_title="Date",
         yaxis_title="Symbol",
-        showlegend=False,
         height=100 + len(availability) * 40,
-        xaxis=dict(type='date'),
-        barmode='overlay'
     )
 
-    fig.write_html("data_availability_timeline.html")
+    fig.write_html("data_availability_timeline.html", include_plotlyjs=True)
     fig.show()
 
 if __name__ == "__main__":
