@@ -17,14 +17,14 @@ from src.analysis import calculate_staggered_metrics
 
 # Default configuration for staggered methodology
 DEFAULT_CONFIG = {
-    "symbols": ["DHT", "FRO", "ASC", "ECO", "NAT", "TNK", "INSW", "TRMD", "TOPS", "TORO", "PSHG"],
+    "symbols": ["DHT", "FRO", "ASC", "NAT", "TNK", "INSW", "STNG", "TRMD", "ZIM", "DAC", "GSL", "CMRE", "SBLK", "GNK", "SB", "DSX", "TOPS", "SHIP", "PSHG", "FLNG", "GLNG", "DLNG", "GASS", "EDRY", "GLBS", "CTRM", "PANL", "MATX", "ESEA", "NMM", "SFL", "NVGS", "KNOP", "LPG"],
     "start_date": "2021-01-01",  # 5 years of data
     "end_date": "2026-01-01",
     # Staggered-specific
     "formation_days": 252,
     "trading_days": 126,
     "overlap_days": 21,
-    "n_pairs": 20,
+    "n_pairs": 10,
     "min_data_pct": 0.95,
     # Backtest
     "entry_threshold": 2.0,
