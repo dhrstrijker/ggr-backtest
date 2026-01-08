@@ -216,6 +216,7 @@ def run_portfolio_cycle(
         trading_open=trading_open,
         pairs=pairs,
         config=config.backtest_config,
+        cycle_id=cycle.cycle_id,
     )
     cycle.results = results
 

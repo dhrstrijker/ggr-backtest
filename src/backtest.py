@@ -44,6 +44,7 @@ class Trade:
     exit_distance: float  # Distance in σ at exit
     exit_reason: str  # 'crossing', 'max_holding', 'end_of_data'
     max_adverse_spread: float  # Maximum adverse spread (in sigma) during trade
+    cycle_id: int | None = None  # Which cycle generated this trade (for staggered)
 
     def to_dict(self) -> dict:
         """Convert trade to dictionary."""
@@ -63,6 +64,7 @@ class Trade:
             "exit_distance": self.exit_distance,
             "exit_reason": self.exit_reason,
             "max_adverse_spread": self.max_adverse_spread,
+            "cycle_id": self.cycle_id,
         }
 
 
@@ -101,6 +103,7 @@ def run_backtest_single_pair(
     trading_open: pd.DataFrame,
     pair: tuple[str, str],
     config: BacktestConfig,
+    cycle_id: int | None = None,
 ) -> BacktestResult:
     """
     Run GGR backtest for a single pair.
@@ -252,6 +255,7 @@ def run_backtest_single_pair(
                     exit_distance=current_distance,
                     exit_reason=exit_reason,
                     max_adverse_spread=position["max_adverse_distance"],
+                    cycle_id=cycle_id,
                 )
                 trades.append(trade)
 
@@ -358,6 +362,7 @@ def run_backtest_single_pair(
             exit_distance=distance.iloc[-1],
             exit_reason="end_of_data",
             max_adverse_spread=position["max_adverse_distance"],
+            cycle_id=cycle_id,
         )
         trades.append(trade)
         equity[-1] += net_pnl
@@ -378,6 +383,7 @@ def run_backtest(
     trading_open: pd.DataFrame,
     pairs: list[tuple[str, str]],
     config: BacktestConfig | None = None,
+    cycle_id: int | None = None,
 ) -> dict[tuple[str, str], BacktestResult]:
     """
     Run GGR backtest for multiple pairs.
@@ -388,6 +394,7 @@ def run_backtest(
         trading_open: Open prices for trading period (for execution)
         pairs: List of pairs to backtest
         config: Backtest configuration (optional)
+        cycle_id: Cycle identifier for staggered backtests (optional)
 
     Returns:
         Dictionary mapping pair to BacktestResult
@@ -398,7 +405,7 @@ def run_backtest(
     results = {}
     for pair in pairs:
         result = run_backtest_single_pair(
-            formation_close, trading_close, trading_open, pair, config
+            formation_close, trading_close, trading_open, pair, config, cycle_id
         )
         results[pair] = result
 

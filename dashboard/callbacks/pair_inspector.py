@@ -176,7 +176,7 @@ def register_pair_inspector_callbacks(app, data_store):
          Input("wait-mode-store", "data")],
     )
     def populate_cycle_selector(pair_value, wait_mode):
-        """Populate the cycle selector with cycles that include this pair."""
+        """Populate the cycle selector with cycles that have trades for this pair."""
         if not pair_value:
             return [], None
 
@@ -188,14 +188,20 @@ def register_pair_inspector_callbacks(app, data_store):
         if not result:
             return [], None
 
-        # Find cycles that include this pair
+        # Get all trades for this pair to check which cycles have trades
+        all_trades = data_store.get_trades_for_pair(pair, wait_mode)
+        cycles_with_trades = {t.cycle_id for t in all_trades if t.cycle_id is not None}
+
+        # Find cycles that have trades for this pair
         options = []
         for cycle in result.cycles:
-            if cycle.pairs and pair in cycle.pairs:
+            if cycle.cycle_id in cycles_with_trades:
+                trade_count = sum(1 for t in all_trades if t.cycle_id == cycle.cycle_id)
                 label = (
                     f"Cycle {cycle.cycle_id}: "
                     f"{cycle.trading_start.strftime('%Y-%m-%d')} to "
-                    f"{cycle.trading_end.strftime('%Y-%m-%d')}"
+                    f"{cycle.trading_end.strftime('%Y-%m-%d')} "
+                    f"({trade_count} trades)"
                 )
                 options.append({"label": label, "value": cycle.cycle_id})
 
@@ -260,10 +266,10 @@ def register_pair_inspector_callbacks(app, data_store):
 
         # Get trades for this pair in this cycle
         all_trades = data_store.get_trades_for_pair(pair, wait_mode)
-        # Filter to trades within this cycle's trading period
+        # Filter to trades that belong to this cycle (by cycle_id, not date overlap)
         cycle_trades = [
             t for t in all_trades
-            if cycle.trading_start <= t.entry_date <= cycle.trading_end
+            if t.cycle_id == selected_cycle_id
         ]
 
         # Create figure
