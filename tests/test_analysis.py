@@ -250,6 +250,71 @@ class TestCalculateMetrics:
 
         assert metrics["total_return_pct"] == 0.2  # (12000 - 10000) / 10000
 
+    def test_profit_factor_all_winners_no_losses(self):
+        """Profit factor with no losses should equal gross profit (denominator defaults to 1)."""
+        trades = [
+            create_trade(pnl=300.0),  # Win
+            create_trade(pnl=200.0),  # Win
+            create_trade(pnl=100.0),  # Win
+        ]
+        equity = pd.Series(
+            [10000.0, 10300.0, 10500.0, 10600.0],
+            index=pd.date_range("2024-01-01", periods=4),
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # With no losses, implementation uses gross_loss=1 to avoid division by zero
+        # So profit_factor = gross_profit / 1 = 600
+        expected_profit_factor = 300.0 + 200.0 + 100.0  # = 600
+        assert metrics["profit_factor"] == expected_profit_factor, \
+            f"Profit factor with no losses should be gross profit ({expected_profit_factor}), got {metrics['profit_factor']}"
+
+    def test_sharpe_ratio_handles_zero_volatility(self):
+        """Sharpe ratio with zero return volatility should handle gracefully."""
+        # Flat equity curve (zero volatility in returns)
+        dates = pd.date_range("2024-01-01", periods=10)
+        equity = pd.Series([10000.0] * 10, index=dates)
+        trades = []  # No trades
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Should return 0 or NaN, not raise an exception
+        assert metrics["sharpe_ratio"] == 0 or np.isnan(metrics["sharpe_ratio"]), \
+            f"Sharpe ratio with zero volatility should be 0 or NaN, got {metrics['sharpe_ratio']}"
+
+    def test_avg_loss_with_no_losses(self):
+        """Average loss with no losses should be 0."""
+        trades = [
+            create_trade(pnl=100.0),  # Win
+            create_trade(pnl=200.0),  # Win
+        ]
+        equity = pd.Series(
+            [10000.0, 10100.0, 10300.0],
+            index=pd.date_range("2024-01-01", periods=3),
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        assert metrics["avg_loss"] == 0, \
+            f"Average loss with no losses should be 0, got {metrics['avg_loss']}"
+
+    def test_avg_win_with_no_wins(self):
+        """Average win with no wins should be 0."""
+        trades = [
+            create_trade(pnl=-100.0),  # Loss
+            create_trade(pnl=-200.0),  # Loss
+        ]
+        equity = pd.Series(
+            [10000.0, 9900.0, 9700.0],
+            index=pd.date_range("2024-01-01", periods=3),
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        assert metrics["avg_win"] == 0, \
+            f"Average win with no wins should be 0, got {metrics['avg_win']}"
+
 
 class TestTradesToDataframe:
     """Tests for trades_to_dataframe function."""

@@ -96,20 +96,32 @@ class TestSSDCalculation:
                 f"Diagonal element {sym},{sym} should be 0"
 
     def test_ssd_manual_calculation(self):
-        """Verify SSD matches manual calculation."""
-        # Simple case: A = [1, 2], B = [1, 1]
-        # Normalized: A = [1, 2], B = [1, 1] (already start at 1)
-        # Diff = [0, 1], Squared = [0, 1], Sum = 1
+        """Verify SSD matches manual calculation with sufficient data points.
+
+        Using 10 data points for more robust verification.
+        """
+        # A: linear growth 100 -> 200
+        # B: stays flat at 100
         prices = pd.DataFrame({
-            'A': [1.0, 2.0],
-            'B': [1.0, 1.0],
+            'A': [100.0 + i * 10 for i in range(11)],  # 100, 110, ..., 200
+            'B': [100.0] * 11,  # stays at 100
         })
         normalized = normalize_prices(prices)
         ssd_matrix = calculate_ssd_matrix(normalized)
 
-        expected_ssd = 1.0  # (1-1)^2 + (2-1)^2 = 0 + 1 = 1
-        assert abs(ssd_matrix.loc['A', 'B'] - expected_ssd) < 0.001, \
-            f"Expected SSD={expected_ssd}, got {ssd_matrix.loc['A', 'B']}"
+        # Normalized A: [1.0, 1.1, 1.2, ..., 2.0]
+        # Normalized B: [1.0, 1.0, 1.0, ..., 1.0]
+        # Diff: [0, 0.1, 0.2, ..., 1.0]
+        # Squared: [0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]
+        # Sum = 0.01 + 0.04 + 0.09 + 0.16 + 0.25 + 0.36 + 0.49 + 0.64 + 0.81 + 1.0 = 3.85
+        expected_ssd = sum((i * 0.1) ** 2 for i in range(11))
+
+        actual_ssd = ssd_matrix.loc['A', 'B']
+        assert abs(actual_ssd - expected_ssd) < 0.001, \
+            f"Expected SSD={expected_ssd:.4f}, got {actual_ssd:.4f}"
+
+        # Also verify it's substantial (catches bugs that always return 0)
+        assert expected_ssd > 3.0, f"Expected SSD should be ~3.85, got {expected_ssd}"
 
     def test_ssd_calculation_accuracy_detailed(self):
         """Verify SSD calculation with detailed manual verification.
@@ -210,11 +222,25 @@ class TestPairSelection:
         })
         normalized = normalize_prices(prices)
         ssd_matrix = calculate_ssd_matrix(normalized)
-        top_pairs = select_top_pairs(ssd_matrix, n=2)
+        top_pairs = select_top_pairs(ssd_matrix, n=3)
 
         # A-B should be first (lowest SSD)
-        assert top_pairs[0] == ('A', 'B') or top_pairs[0] == ('B', 'A'), \
-            f"A-B should be top pair, got {top_pairs[0]}"
+        first_pair = tuple(sorted(top_pairs[0]))
+        assert first_pair == ('A', 'B'), \
+            f"A-B should be top pair (lowest SSD), got {top_pairs[0]}"
+
+        # Verify SSD ordering: each subsequent pair should have higher SSD
+        for i in range(len(top_pairs) - 1):
+            pair1 = top_pairs[i]
+            pair2 = top_pairs[i + 1]
+            ssd1 = ssd_matrix.loc[pair1[0], pair1[1]]
+            ssd2 = ssd_matrix.loc[pair2[0], pair2[1]]
+            assert ssd1 <= ssd2, \
+                f"Pairs should be ordered by SSD: {pair1} (SSD={ssd1:.4f}) should be <= {pair2} (SSD={ssd2:.4f})"
+
+        # Verify A-B SSD is actually small (similar pairs)
+        ab_ssd = ssd_matrix.loc['A', 'B']
+        assert ab_ssd < 0.01, f"A-B SSD should be very small, got {ab_ssd:.4f}"
 
     def test_select_top_pairs_count(self):
         """Should return requested number of pairs."""

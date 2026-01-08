@@ -113,8 +113,12 @@ class TestGGRSignalGeneration:
         # Index 2 should still detect entry
         assert signals.iloc[2] == -1, "Should still detect entry after NaN"
 
-    def test_spread_at_exactly_threshold(self):
-        """Test entry when spread equals exactly the threshold (2σ)."""
+    def test_spread_at_exactly_threshold_does_not_enter(self):
+        """Test that entry requires spread to EXCEED threshold (> not >=).
+
+        Per GGR paper: Entry when distance > 2σ (strict inequality).
+        At exactly 2σ, we should NOT enter - must exceed threshold.
+        """
         formation_std = 0.05
         threshold = 2.0
 
@@ -123,10 +127,9 @@ class TestGGRSignalGeneration:
         signals = generate_signals_ggr(spread, formation_std, entry_threshold=threshold)
 
         # Index 2 has spread = 0.10, which is exactly 2.0σ
-        # Whether >= or > is used determines behavior
-        # This test documents the actual behavior
-        assert signals.iloc[2] in [0, -1], \
-            "At exactly threshold, should either enter or not (implementation detail)"
+        # GGR uses strict inequality (>), so exactly at threshold should NOT enter
+        assert signals.iloc[2] == 0, \
+            f"At exactly 2σ threshold, should NOT enter (strict > comparison). Got signal={signals.iloc[2]}"
 
     def test_spread_just_below_threshold(self):
         """Spread at 1.999σ should NOT trigger entry."""
@@ -162,24 +165,37 @@ class TestGGRSignalGeneration:
         """Test crossing detection with near-zero spread values."""
         formation_std = 0.05
 
-        # Spread that crosses zero with very small values
-        # This tests floating-point precision handling
+        # Spread that crosses zero with very small values, then diverges again
+        # This tests floating-point precision handling at the crossing point
         spread = pd.Series([
             0.0,
-            0.12,       # Entry
+            0.12,       # Entry (> 2σ = 0.10) → signal -1
             0.08,
             0.04,
             0.001,      # Very close to zero but positive
             -0.001,     # Very close to zero but negative (should trigger exit)
-            -0.05,
+            -0.05,      # Still within threshold, no re-entry
+            -0.12,      # Back outside threshold (< -2σ = -0.10) → new entry if exited
         ])
         signals = generate_signals_ggr(spread, formation_std, entry_threshold=2.0)
 
         # Entry at index 1
         assert signals.iloc[1] == -1, "Should enter short at 0.12"
 
-        # The state machine should handle the crossing even at tiny values
-        # No additional entries should occur at negative values since we already crossed
+        # Exit at index 5 when spread crosses from positive to negative
+        # Per implementation: signal=0 means "exit or no action"
+        # The state machine should detect the crossing even at tiny values (0.001 to -0.001)
+        assert signals.iloc[5] == 0, \
+            f"Signal at exit point should be 0 (exit per implementation), got {signals.iloc[5]}"
+
+        # To verify the exit ACTUALLY happened, check that a new entry can occur
+        # At index 7, spread = -0.12 < -0.10 = -2σ → should trigger new long entry
+        assert signals.iloc[7] == 1, \
+            f"Should enter long at -0.12 (proves exit happened at tiny crossing). Got {signals.iloc[7]}"
+
+        # After re-entry at index 7, no duplicate entry signals at index 6
+        assert signals.iloc[6] == 0, \
+            f"Should not re-enter at -0.05 (< 2σ = 0.10), got {signals.iloc[6]}"
 
     def test_very_small_formation_std(self):
         """Test behavior with very small formation std (high sensitivity)."""
@@ -235,10 +251,14 @@ class TestFormationStats:
         Critical GGR test: The entry threshold must remain based on
         formation period σ, not adapt to new volatility.
         """
-        # Formation period: low volatility (σ ≈ 0.05)
+        # Formation period: low volatility (σ ≈ 0.03)
         formation_spread = pd.Series([0.0, 0.03, -0.02, 0.04, -0.03, 0.02, -0.04, 0.03, -0.02, 0.01])
         formation_stats = calculate_formation_stats(formation_spread)
         formation_std = formation_stats['std']
+
+        # Verify formation std is small (around 0.03)
+        assert 0.02 < formation_std < 0.05, \
+            f"Formation std should be ~0.03, got {formation_std:.4f}"
 
         # Trading period: HIGH volatility (σ would be ~0.3 if recalculated)
         # But we should still use the formation σ
@@ -247,11 +267,16 @@ class TestFormationStats:
         # Calculate distance using FORMATION std (static)
         distance = calculate_distance(trading_spread, formation_std)
 
-        # If using formation σ (~0.03), distance at 0.2 spread should be ~6.7σ
+        # Calculate expected distance: 0.2 / formation_std
+        expected_distance = 0.2 / formation_std
+
+        # If using formation σ (~0.03), distance at 0.2 spread should be ~6-7σ
         # If using trading σ (~0.25), distance would be only ~0.8σ
         # This verifies we're using the static formation σ
-        assert abs(distance.iloc[1]) > 3.0, \
-            f"Distance should be large (>3σ) using formation std, got {distance.iloc[1]:.2f}σ"
+        assert abs(distance.iloc[1]) > 5.0, \
+            f"Distance should be > 5σ using formation std (~0.03), got {distance.iloc[1]:.2f}σ"
+        assert abs(distance.iloc[1] - expected_distance) < 0.1, \
+            f"Distance should be ~{expected_distance:.1f}σ, got {distance.iloc[1]:.2f}σ"
 
     def test_signal_opens_at_two_historical_std(self):
         """Entry should occur only when |distance| > 2σ from formation period.

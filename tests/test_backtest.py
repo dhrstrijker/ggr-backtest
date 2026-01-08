@@ -25,21 +25,21 @@ class TestTradeExecution:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
-        # Formation period: stocks move together
+        # Formation period: stocks move with DIFFERENT patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + i * 0.1 for i in range(50)],
-            'B': [100.0 + i * 0.1 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
-        # Trading period: A stays flat, B drops - spread will go positive
+        # Trading period: A stays flat, B drops significantly - spread will go positive
         trading_close = pd.DataFrame({
             'A': [100.0] * 30,
-            'B': [100.0] * 10 + [80.0] * 20,  # Drop mid-series
+            'B': [100.0] * 5 + [70.0] * 25,  # Significant drop to ensure entry
         }, index=trading_dates)
 
         trading_open = pd.DataFrame({
             'A': [100.5] * 30,  # Open slightly different from close
-            'B': [100.5] * 10 + [80.5] * 20,
+            'B': [100.5] * 5 + [70.5] * 25,
         }, index=trading_dates)
 
         config = BacktestConfig(
@@ -52,12 +52,19 @@ class TestTradeExecution:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        # If we have trades, check execution prices
-        if result.trades:
-            trade = result.trades[0]
-            # Entry should use OPEN prices, not CLOSE prices
-            assert trade.entry_price_a == 100.5 or trade.entry_price_a == 80.5, \
-                "Entry should use open prices"
+        # Must have trades - test data is designed to trigger entry
+        assert len(result.trades) > 0, \
+            "Test data should trigger at least one trade (B drops 30% while A stays flat)"
+
+        trade = result.trades[0]
+        # Entry should use OPEN prices, not CLOSE prices
+        # Verify the entry price matches the open price on the entry date
+        expected_open_a = trading_open.loc[trade.entry_date, 'A']
+        expected_open_b = trading_open.loc[trade.entry_date, 'B']
+        assert trade.entry_price_a == expected_open_a, \
+            f"Entry price A should be open price {expected_open_a}, got {trade.entry_price_a}"
+        assert trade.entry_price_b == expected_open_b, \
+            f"Entry price B should be open price {expected_open_b}, got {trade.entry_price_b}"
 
 
 class TestGGRExitLogic:
@@ -68,16 +75,18 @@ class TestGGRExitLogic:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
-        # Formation: moderate volatility
+        # Formation: stocks move with DIFFERENT patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
-        # Trading: spread goes positive (A > B), then crosses zero
-        # Normalized: A/A[0] - B/B[0] starts at 0, goes positive, then negative
+        # Trading: spread goes positive (A > B), then crosses zero (A < B)
+        # Day 0-4: both at 100 (spread = 0)
+        # Day 5-14: A jumps to 130 (positive spread, triggers short entry)
+        # Day 15-29: A drops to 90 (spread crosses zero to negative, triggers exit)
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [120.0] * 10 + [95.0] * 10,  # Up then down
+            'A': [100.0] * 5 + [130.0] * 10 + [90.0] * 15,  # Up significantly then down below B
             'B': [100.0] * 30,  # Flat
         }, index=trading_dates)
 
@@ -85,7 +94,7 @@ class TestGGRExitLogic:
 
         config = BacktestConfig(
             entry_threshold=1.0,  # Easy entry
-            max_holding_days=50,  # High so crossing triggers exit
+            max_holding_days=50,  # High so crossing triggers exit, not max_holding
             capital_per_trade=10000,
         )
 
@@ -93,10 +102,15 @@ class TestGGRExitLogic:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        # Should have at least one trade that exits on crossing
+        # Must have trades - test data is designed to trigger entry
+        assert len(result.trades) > 0, \
+            "Test data should trigger at least one trade (A jumps 30% while B stays flat)"
+
+        # At least one trade should exit on crossing
         crossing_exits = [t for t in result.trades if t.exit_reason == 'crossing']
-        assert len(crossing_exits) > 0 or len(result.trades) == 0, \
-            "Should exit on crossing zero if trade was entered"
+        assert len(crossing_exits) > 0, \
+            f"Should have at least one trade that exits on crossing zero. " \
+            f"Got {len(result.trades)} trades with exit reasons: {[t.exit_reason for t in result.trades]}"
 
 
 class TestDataAlignment:
@@ -168,15 +182,18 @@ class TestPnLCalculation:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=50, freq='D')
 
+        # Formation: stocks move with DIFFERENT patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 10 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 10 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
         # Create prices that will trigger entry then exit
+        # A drops significantly while B rises - creates large spread for entry
+        # Then they converge back - triggers exit
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [90.0] * 10 + [100.0] * 10 + [110.0] * 20,
-            'B': [100.0] * 10 + [110.0] * 10 + [100.0] * 10 + [95.0] * 20,
+            'A': [100.0] * 5 + [80.0] * 15 + [100.0] * 30,  # Drop then recover
+            'B': [100.0] * 5 + [120.0] * 15 + [100.0] * 30,  # Rise then recover
         }, index=trading_dates)
 
         trading_open = trading_close.copy()
@@ -192,15 +209,17 @@ class TestPnLCalculation:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        # Just verify trades were generated and P&L is calculated
-        if result.trades:
-            trade = result.trades[0]
-            # P&L should be a number, not NaN
-            assert not np.isnan(trade.pnl), "P&L should not be NaN"
-            # P&L percentage should match
-            expected_pnl_pct = trade.pnl / config.capital_per_trade
-            assert abs(trade.pnl_pct - expected_pnl_pct) < 0.001, \
-                "P&L percentage should match"
+        # Must have trades - test data is designed to trigger entry
+        assert len(result.trades) > 0, \
+            "Test data should trigger at least one trade (A drops 20%, B rises 20%)"
+
+        trade = result.trades[0]
+        # P&L should be a number, not NaN
+        assert not np.isnan(trade.pnl), "P&L should not be NaN"
+        # P&L percentage should match
+        expected_pnl_pct = trade.pnl / config.capital_per_trade
+        assert abs(trade.pnl_pct - expected_pnl_pct) < 0.001, \
+            "P&L percentage should match"
 
 
 class TestMaxHoldingDays:
@@ -211,14 +230,16 @@ class TestMaxHoldingDays:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=100, freq='D')
 
+        # Formation: stocks move with DIFFERENT patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
-        # Create prices that stay diverged (never cross zero)
+        # Create prices that diverge and STAY diverged (never cross zero)
+        # A jumps up significantly and stays there - spread never reverts
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [150.0] * 90,  # Jump and stay high
+            'A': [100.0] * 5 + [150.0] * 95,  # Jump and stay high
             'B': [100.0] * 100,  # Stay flat
         }, index=trading_dates)
 
@@ -234,13 +255,20 @@ class TestMaxHoldingDays:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        # Check if any trades exited due to max holding
-        if result.trades:
-            max_holding_exits = [t for t in result.trades if t.exit_reason == 'max_holding']
-            assert len(max_holding_exits) > 0, \
-                "Should have trades that exit via max_holding"
-            assert all(t.holding_days <= config.max_holding_days for t in result.trades), \
-                "Trades should respect max holding days"
+        # Must have trades - test data is designed to trigger entry
+        assert len(result.trades) > 0, \
+            "Test data should trigger at least one trade (A jumps 50% while B stays flat)"
+
+        # Since spread never crosses zero, trades must exit via max_holding
+        max_holding_exits = [t for t in result.trades if t.exit_reason == 'max_holding']
+        assert len(max_holding_exits) > 0, \
+            f"Should have trades that exit via max_holding since spread never crosses zero. " \
+            f"Got exit reasons: {[t.exit_reason for t in result.trades]}"
+
+        # All trades should respect max holding days
+        for trade in result.trades:
+            assert trade.holding_days <= config.max_holding_days, \
+                f"Trade held for {trade.holding_days} days, exceeds max of {config.max_holding_days}"
 
 
 class TestEdgeCases:
@@ -452,11 +480,19 @@ class TestEdgeCases:
                 f"Commission should reduce P&L: {pnl_with_comm} should be < {pnl_no_comm}"
 
     def test_zero_std_formation_handles_gracefully(self):
-        """Should handle formation period with zero volatility gracefully."""
+        """Should handle formation period with zero volatility gracefully.
+
+        When formation period has zero spread std (identical price movements),
+        any non-zero spread in trading period would be "infinite" sigmas.
+
+        Current behavior: Trades are generated with inf entry_distance.
+        This is suboptimal but not a crash. Ideally, pairs with zero
+        formation std should be skipped entirely in pair selection.
+        """
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
-        # Formation: exactly zero volatility (constant prices)
+        # Formation: exactly zero spread volatility (identical prices)
         formation_close = pd.DataFrame({
             'A': [100.0] * 50,
             'B': [100.0] * 50,
@@ -475,17 +511,19 @@ class TestEdgeCases:
             capital_per_trade=10000,
         )
 
-        # Should not crash - either skip pair or handle division by zero
-        try:
-            result = run_backtest_single_pair(
-                formation_close, trading_close, trading_open, ('A', 'B'), config
-            )
-            # If it runs, result should be valid
-            assert isinstance(result.trades, list), "Should return valid result"
-            assert len(result.equity_curve) > 0, "Should have equity curve"
-        except (ZeroDivisionError, ValueError) as e:
-            # Acceptable to raise error for zero std case
-            pytest.skip(f"Zero std raises expected error: {e}")
+        # Should not crash - must handle division by zero gracefully
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Result should be valid (not crash)
+        assert isinstance(result.trades, list), "Should return valid trades list"
+        assert len(result.equity_curve) > 0, "Should have equity curve"
+
+        # Verify trades have valid P&L (not NaN) even if entry_distance is inf
+        for trade in result.trades:
+            assert not np.isnan(trade.pnl), \
+                "P&L should not be NaN even with zero formation std"
 
 
 class TestForcedLiquidation:
@@ -720,13 +758,14 @@ class TestMaxAdverseExcursion:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Formation: Different patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'A': [100.0] * 5 + [130.0] * 15 + [100.0] * 10,  # Large divergence
             'B': [100.0] * 30,
         }, index=trading_dates)
 
@@ -742,24 +781,27 @@ class TestMaxAdverseExcursion:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        if result.trades:
-            trade = result.trades[0]
-            assert hasattr(trade, 'max_adverse_spread'), "Trade should have max_adverse_spread"
-            assert isinstance(trade.max_adverse_spread, float), "max_adverse_spread should be float"
+        # Must have trades
+        assert len(result.trades) > 0, "Test data should trigger at least one trade"
+
+        trade = result.trades[0]
+        assert hasattr(trade, 'max_adverse_spread'), "Trade should have max_adverse_spread"
+        assert isinstance(trade.max_adverse_spread, float), "max_adverse_spread should be float"
 
     def test_mae_at_least_entry_distance_for_short(self):
         """For short spread, MAE should be at least as extreme as entry distance."""
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Formation: Different patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
         # Positive spread: short entry (direction=-1)
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'A': [100.0] * 5 + [130.0] * 15 + [100.0] * 10,  # Large divergence
             'B': [100.0] * 30,
         }, index=trading_dates)
 
@@ -775,25 +817,32 @@ class TestMaxAdverseExcursion:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        for trade in result.trades:
-            if trade.direction == -1:  # Short spread
-                # MAE should be at least as extreme (positive) as entry
-                assert trade.max_adverse_spread >= trade.entry_distance, \
-                    f"Short spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
+        # Must have trades
+        assert len(result.trades) > 0, "Test data should trigger at least one trade"
+
+        # Find short spread trades and verify MAE
+        short_trades = [t for t in result.trades if t.direction == -1]
+        assert len(short_trades) > 0, "Should have at least one short spread trade"
+
+        for trade in short_trades:
+            # MAE should be at least as extreme (positive) as entry
+            assert trade.max_adverse_spread >= trade.entry_distance, \
+                f"Short spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
 
     def test_mae_at_least_entry_distance_for_long(self):
         """For long spread, MAE should be at least as extreme as entry distance."""
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Formation: Different patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
-        # Negative spread: long entry (direction=1)
+        # Negative spread: long entry (direction=1) - A drops significantly
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [80.0] * 10 + [100.0] * 10,  # A drops
+            'A': [100.0] * 5 + [70.0] * 15 + [100.0] * 10,  # A drops 30%
             'B': [100.0] * 30,
         }, index=trading_dates)
 
@@ -809,29 +858,38 @@ class TestMaxAdverseExcursion:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        for trade in result.trades:
-            if trade.direction == 1:  # Long spread
-                # MAE should be at least as extreme (negative or more positive) as entry
-                # For long spread entered at negative distance, adverse is more positive
-                assert trade.max_adverse_spread >= trade.entry_distance, \
-                    f"Long spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
+        # Must have trades
+        assert len(result.trades) > 0, "Test data should trigger at least one trade"
+
+        # Find long spread trades and verify MAE
+        long_trades = [t for t in result.trades if t.direction == 1]
+        assert len(long_trades) > 0, "Should have at least one long spread trade"
+
+        for trade in long_trades:
+            # MAE should be at least as extreme as entry
+            # For long spread entered at negative distance, MAE tracks the more negative extreme
+            assert trade.max_adverse_spread >= trade.entry_distance, \
+                f"Long spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
 
     def test_mae_captures_worst_case(self):
-        """MAE should capture the most extreme spread during trade."""
+        """MAE should capture the most extreme spread during trade.
+
+        Setup: Short spread entry at ~2σ, spread worsens to ~4σ, then converges.
+        MAE should capture the 4σ peak, not just the 2σ entry.
+        """
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=40, freq='D')
 
-        # Formation period with actual volatility (not identical prices)
-        # Create some spread variation so formation_std is non-zero
+        # Formation period with controlled volatility
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5 + 0.5) * 4 for i in range(50)],  # Different pattern
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
-        # Short spread entry: A rises -> goes even higher -> converges
-        # Entry at ~+2σ, worsens to ~+4σ, then converges
+        # Short spread entry: A rises (entry) -> rises MORE (worse) -> converges
+        # Entry at ~115, worst at ~140, then converges to 100
         trading_close = pd.DataFrame({
-            'A': [100.0] * 5 + [115.0] * 5 + [125.0] * 10 + [100.0] * 20,
+            'A': [100.0] * 5 + [115.0] * 5 + [140.0] * 10 + [100.0] * 20,
             'B': [100.0] * 40,
         }, index=trading_dates)
 
@@ -847,28 +905,34 @@ class TestMaxAdverseExcursion:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        if result.trades:
-            trade = result.trades[0]
-            # Verify that trade has finite distances (valid test data)
-            if np.isfinite(trade.entry_distance) and np.isfinite(trade.max_adverse_spread):
-                if trade.direction == -1:  # Short spread
-                    # MAE should be greater than or equal to entry
-                    # (equals if spread didn't widen after entry)
-                    assert trade.max_adverse_spread >= trade.entry_distance, \
-                        "MAE should be >= entry distance for short spread"
+        # Must have trades
+        assert len(result.trades) > 0, "Test data should trigger at least one trade"
+
+        trade = result.trades[0]
+
+        # Verify trade has finite distances
+        assert np.isfinite(trade.entry_distance), "Entry distance should be finite"
+        assert np.isfinite(trade.max_adverse_spread), "MAE should be finite"
+
+        # For short spread, MAE should be GREATER than entry (spread worsened after entry)
+        # Entry at 115, worst at 140 - the spread got worse before converging
+        assert trade.max_adverse_spread > trade.entry_distance, \
+            f"MAE ({trade.max_adverse_spread:.2f}) should be > entry ({trade.entry_distance:.2f}) " \
+            f"since spread worsened from 115 to 140 before converging"
 
     def test_mae_in_to_dict(self):
         """max_adverse_spread should be included in to_dict() output."""
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Formation: Different patterns to create non-zero spread std
         formation_close = pd.DataFrame({
-            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
         }, index=formation_dates)
 
         trading_close = pd.DataFrame({
-            'A': [100.0] * 10 + [120.0] * 10 + [100.0] * 10,
+            'A': [100.0] * 5 + [130.0] * 15 + [100.0] * 10,  # Large divergence
             'B': [100.0] * 30,
         }, index=trading_dates)
 
@@ -884,9 +948,13 @@ class TestMaxAdverseExcursion:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
-        if result.trades:
-            trade_dict = result.trades[0].to_dict()
-            assert 'max_adverse_spread' in trade_dict, "to_dict() should include max_adverse_spread"
+        # Must have trades
+        assert len(result.trades) > 0, "Test data should trigger at least one trade"
+
+        trade_dict = result.trades[0].to_dict()
+        assert 'max_adverse_spread' in trade_dict, "to_dict() should include max_adverse_spread"
+        assert isinstance(trade_dict['max_adverse_spread'], float), \
+            "max_adverse_spread in dict should be float"
 
 
 class TestInitialDivergence:

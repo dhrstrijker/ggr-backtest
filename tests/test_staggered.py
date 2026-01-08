@@ -167,11 +167,14 @@ class TestGeneratePortfolioCycles:
         cycles = generate_portfolio_cycles(sample_dates, config)
 
         # With 756 days, formation=252, trading=126, overlap=21
-        # First cycle needs 378 days
+        # First cycle needs 252 + 126 = 378 days
         # Each subsequent cycle starts 21 days later
-        # Expected: (756 - 378) / 21 + 1 = 18 cycles approximately
-        assert len(cycles) > 0
-        assert len(cycles) <= 20  # Reasonable upper bound
+        # Days available for new cycles: 756 - 378 = 378 days
+        # Number of additional cycles: 378 / 21 = 18
+        # Total cycles: 1 + 18 = 19
+        expected_cycles = 1 + (len(sample_dates) - (config.formation_days + config.trading_days)) // config.overlap_days
+        assert len(cycles) == expected_cycles, \
+            f"Expected {expected_cycles} cycles for {len(sample_dates)} days, got {len(cycles)}"
 
     def test_cycle_dates_are_correct(self, sample_dates):
         """Test that cycle date boundaries are correct."""
@@ -432,12 +435,31 @@ class TestAggregateMonthlyReturns:
         cycles = [cycle1, cycle2]
         avg_returns, active_counts = aggregate_monthly_returns(cycles)
 
-        # Check that active counts are correct
+        # Verify we got results
+        assert len(avg_returns) > 0, "Should have aggregated returns"
+        assert len(active_counts) > 0, "Should have active counts"
+
+        # Verify active counts are correct:
         # Jan 2021: only cycle1 active (1)
         # Feb-Jun 2021: both active (2)
         # Jul 2021: only cycle2 active (1)
-        assert len(avg_returns) > 0
-        assert len(active_counts) > 0
+        jan_2021 = pd.Timestamp("2021-01-31")
+        feb_2021 = pd.Timestamp("2021-02-28")
+        jul_2021 = pd.Timestamp("2021-07-31")
+
+        if jan_2021 in active_counts.index:
+            assert active_counts.loc[jan_2021] == 1, "Jan 2021: only cycle1 active"
+        if feb_2021 in active_counts.index:
+            assert active_counts.loc[feb_2021] == 2, "Feb 2021: both cycles active"
+        if jul_2021 in active_counts.index:
+            assert active_counts.loc[jul_2021] == 1, "Jul 2021: only cycle2 active"
+
+        # Verify Feb 2021 return is average of both: (0.02 + 0.02) / 2 = 0.02
+        # cycle1 has 0.02 for Feb, cycle2 has 0.02 for Feb
+        if feb_2021 in avg_returns.index:
+            expected_feb = (0.02 + 0.02) / 2
+            assert abs(avg_returns.loc[feb_2021] - expected_feb) < 0.001, \
+                f"Feb 2021 return should be {expected_feb}, got {avg_returns.loc[feb_2021]}"
 
     def test_handles_empty_cycles(self):
         """Test handling of empty cycle list."""
@@ -475,7 +497,15 @@ class TestRunStaggeredBacktest:
         assert result.config == config
 
     def test_active_portfolio_count_stabilizes(self, sample_prices):
-        """Test that active portfolio count reaches expected level."""
+        """Test that active portfolio count reaches expected level.
+
+        Per GGR paper: With 6-month trading and 1-month overlap,
+        at steady state there are exactly 6 active portfolios (126 / 21 = 6).
+
+        Note: With limited data (756 days), we may not see true steady state
+        due to ramp-up at start and ramp-down at end. This test verifies
+        we reach a reasonable maximum.
+        """
         close_prices, open_prices = sample_prices
 
         config = StaggeredConfig(
@@ -487,15 +517,21 @@ class TestRunStaggeredBacktest:
 
         result = run_staggered_backtest(close_prices, open_prices, config)
 
-        # After ramp-up, should have ~6 active portfolios
-        # (trading_days / overlap_days = 126 / 21 = 6)
+        # Expected active portfolios at steady state
+        expected_active = config.trading_days // config.overlap_days  # 126 / 21 = 6
+
         active_counts = result.active_portfolios_over_time.dropna()
-        if len(active_counts) > 6:
-            # Check steady state (after first 6 months)
-            steady_state = active_counts.iloc[6:]
-            if len(steady_state) > 0:
-                avg_active = steady_state.mean()
-                assert avg_active >= 4  # Should be close to 6
+        assert len(active_counts) > 0, "Should have active portfolio counts"
+
+        # Check that we reach close to the expected steady state
+        max_active = active_counts.max()
+        # With 756 days of data (includes ramp-up/down), allow up to 2 below target
+        assert max_active >= expected_active - 2, \
+            f"Should reach at least {expected_active - 2} active portfolios (target: {expected_active}), got max {max_active}"
+
+        # Verify we don't have absurdly few portfolios (catches major bugs)
+        assert max_active >= 3, \
+            f"Must have at least 3 active portfolios at peak, got {max_active}"
 
     def test_insufficient_data_raises_error(self):
         """Test that insufficient data raises ValueError."""
@@ -559,14 +595,32 @@ class TestStaggeredWithMissingData:
 
         result = run_staggered_backtest(close_prices, open_prices, config)
 
+        # Must have cycles to verify filtering
+        assert len(result.cycles) > 0, "Should have at least one cycle"
+
         # Check that valid_symbols varies across cycles
         valid_symbols_sets = [
             set(c.valid_symbols) for c in result.cycles if c.valid_symbols
         ]
 
-        # At least some cycles should have different valid symbols
-        # due to the missing data pattern
-        assert len(result.cycles) > 0
+        # Verify we actually got valid symbols in some cycles
+        assert len(valid_symbols_sets) > 0, "At least some cycles should have valid symbols"
+
+        # With the missing data pattern (C starts late, D ends early),
+        # early cycles should have different valid symbols than later cycles
+        # Specifically: C is missing first 100 days, D is missing last 50 days
+        # So early cycles won't have C, late cycles won't have D
+
+        # Get valid symbols from first and last cycles
+        first_cycle_symbols = set(result.cycles[0].valid_symbols) if result.cycles[0].valid_symbols else set()
+        last_cycle_symbols = set(result.cycles[-1].valid_symbols) if result.cycles[-1].valid_symbols else set()
+
+        # A and B should be valid in all cycles (complete data)
+        if first_cycle_symbols and last_cycle_symbols:
+            assert "A" in first_cycle_symbols, "A should be valid in first cycle"
+            assert "A" in last_cycle_symbols, "A should be valid in last cycle"
+            assert "B" in first_cycle_symbols, "B should be valid in first cycle"
+            assert "B" in last_cycle_symbols, "B should be valid in last cycle"
 
 
 # =============================================================================
@@ -606,13 +660,11 @@ class TestSteadyStatePortfolioCount:
     """
 
     def test_six_portfolios_achievable_at_steady_state(self):
-        """With sufficient data, should be able to reach 6 active portfolios.
+        """With sufficient data, should reach exactly 6 active portfolios.
 
+        Per GGR paper: trading_days / overlap_days = 126 / 21 = 6 portfolios.
         The ramp-up is 12 months formation + 6 months to reach steady state.
-        After ~18 months, portfolio count should stabilize at or near 6.
-
-        Note: The exact count depends on data length and boundary effects.
-        With limited data, we may not see exactly 6 but should approach it.
+        After ~18 months, portfolio count should stabilize at exactly 6.
         """
         # Need enough data for steady state: 18 months ramp + some steady state
         # 252 formation + 126 trading = 378 days for first cycle
@@ -644,20 +696,24 @@ class TestSteadyStatePortfolioCount:
 
         result = run_staggered_backtest(close_prices, open_prices, config)
 
+        # Expected active portfolios at steady state
+        expected_active = config.trading_days // config.overlap_days  # 6
+
         # Get active portfolio counts
         active_counts = result.active_portfolios_over_time.dropna()
+        assert len(active_counts) > 0, "Should have active portfolio counts"
 
-        if len(active_counts) > 0:
-            max_count = active_counts.max()
-            # With sufficient data, should reach 6 portfolios (or very close)
-            assert max_count >= 5, \
-                f"Should reach at least 5 active portfolios, got max {max_count}"
+        max_count = active_counts.max()
+        # With sufficient data (1000 days), should reach 6 portfolios
+        # Allow for boundary effects (off by 1) but not major deviations
+        assert max_count >= expected_active - 1 and max_count <= expected_active, \
+            f"Should reach {expected_active - 1} to {expected_active} active portfolios with 1000 days of data, got max {max_count}"
 
-    def test_portfolio_count_approaches_six(self):
-        """Active portfolio count should approach 6 with sufficient data.
+    def test_portfolio_count_approaches_six_with_limited_data(self):
+        """With 600 days, should still approach 6 portfolios.
 
-        This test uses less data and verifies we get close to 6 portfolios,
-        allowing for boundary effects.
+        600 days is enough for: 378 days first cycle + 5 * 21 = 483 days
+        So we should get at least 5-6 active portfolios.
         """
         np.random.seed(42)
         dates = pd.bdate_range(start="2020-01-01", periods=600, freq="B")
@@ -685,14 +741,22 @@ class TestSteadyStatePortfolioCount:
 
         result = run_staggered_backtest(close_prices, open_prices, config)
 
-        # Get active portfolio counts
-        active_counts = result.active_portfolios_over_time.dropna()
+        # Expected active portfolios at steady state
+        expected_active = config.trading_days // config.overlap_days  # 6
 
-        if len(active_counts) > 0:
-            max_count = active_counts.max()
-            # Should get at least 5 portfolios (close to 6)
-            assert max_count >= 5, \
-                f"Should have at least 5 active portfolios, got max {max_count}"
+        # With 600 days, calculate how many cycles we can start
+        # First cycle needs 378 days, each additional needs 21 more days
+        # 600 - 378 = 222 days for additional cycles = 10 additional cycles possible
+        # But only 6 can be active at once (trading period = 126 days)
+
+        active_counts = result.active_portfolios_over_time.dropna()
+        assert len(active_counts) > 0, "Should have active portfolio counts"
+
+        max_count = active_counts.max()
+        # With 600 days, should reach at least 5 portfolios (allowing for boundary)
+        # But ideally reach 6
+        assert max_count >= expected_active - 1, \
+            f"Should have at least {expected_active - 1} active portfolios with 600 days, got max {max_count}"
 
     def test_portfolio_count_formula(self):
         """Verify portfolio count = trading_days / overlap_days."""
@@ -901,6 +965,7 @@ class TestZeroInterestAssumption:
         }, index=formation_dates)
 
         # Create a pattern: diverge early, converge, then stay flat (no more trades)
+        # A spikes to 120 (20% divergence) then returns to 100, while B stays at 100
         trading_a = [100.0] * 5 + [120.0] * 5 + [100.0] * 50  # Spike then flat
         trading_b = [100.0] * 60
 
@@ -923,16 +988,23 @@ class TestZeroInterestAssumption:
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
 
+        # Test data is designed to trigger trades from the 20% divergence
+        assert len(result.trades) > 0, \
+            "Test data should trigger trades (A spikes 20% while B flat)"
+
         # After trades complete, equity should stay flat
-        if result.trades:
-            last_exit = max(t.exit_date for t in result.trades)
-            last_exit_idx = trading_dates.get_loc(last_exit)
+        last_exit = max(t.exit_date for t in result.trades)
+        last_exit_idx = trading_dates.get_loc(last_exit)
 
-            # Get equity values after last trade
-            post_trade_equity = result.equity_curve.iloc[last_exit_idx + 1:]
+        # Get equity values after last trade
+        post_trade_equity = result.equity_curve.iloc[last_exit_idx + 1:]
 
-            if len(post_trade_equity) > 1:
-                # All values should be the same (flat)
-                unique_values = post_trade_equity.unique()
-                assert len(unique_values) == 1, \
-                    f"Equity should be flat after trades, got {len(unique_values)} unique values"
+        # Must have some period after trades to verify flat equity
+        assert len(post_trade_equity) > 0, \
+            f"Need post-trade period to verify flat equity (last exit at index {last_exit_idx} of {len(trading_dates)})"
+
+        if len(post_trade_equity) > 1:
+            # All values should be the same (flat)
+            unique_values = post_trade_equity.unique()
+            assert len(unique_values) == 1, \
+                f"Equity should be flat after trades, got {len(unique_values)} unique values: {unique_values}"
