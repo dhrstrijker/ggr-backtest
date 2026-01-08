@@ -887,3 +887,210 @@ class TestMaxAdverseExcursion:
         if result.trades:
             trade_dict = result.trades[0].to_dict()
             assert 'max_adverse_spread' in trade_dict, "to_dict() should include max_adverse_spread"
+
+
+class TestInitialDivergence:
+    """Test suite for immediate divergence scenario (divergence on day 1 of trading).
+
+    Note: Day 0 of trading always has spread=0 because prices are normalized from
+    the start of the trading period. So "immediate divergence" means divergence
+    occurs on day 1.
+    """
+
+    def test_trade_opens_early_on_immediate_divergence(self):
+        """If pair diverges >2σ immediately (day 1), should open trade early.
+
+        Per GGR paper: A trade should be opened as soon as divergence exceeds 2σ.
+        Since spread is normalized from day 0, divergence can first appear on day 1.
+        """
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Formation: stocks move with DIFFERENT patterns to create non-zero spread std
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],  # Different pattern
+        }, index=formation_dates)
+
+        # Calculate formation std to know what 2σ threshold is
+        from src.signals import calculate_spread, calculate_formation_stats
+        formation_spread = calculate_spread(
+            formation_close['A'], formation_close['B'], normalize=True
+        )
+        formation_stats = calculate_formation_stats(formation_spread)
+        formation_std = formation_stats['std']
+
+        # Trading: Day 0 same price, Day 1+ diverges beyond 2σ
+        # Normalized spread = (A/A[0]) - (B/B[0])
+        # Day 0: spread = 0 (both normalized to 1)
+        # Day 1+: A jumps to create spread > 2σ
+        divergence_needed = 3.0 * formation_std  # 3σ divergence
+        a_diverged_price = 100.0 * (1 + divergence_needed)
+
+        trading_a = [100.0] + [a_diverged_price] * 14 + [100.0] * 15
+        trading_b = [100.0] * 30
+
+        trading_close = pd.DataFrame({
+            'A': trading_a,
+            'B': trading_b,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=2.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+            wait_days=1,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should have at least one trade
+        assert len(result.trades) > 0, "Should open trade when diverged on day 1"
+
+        # First trade should enter early (day 2 with wait_days=1, since signal on day 1)
+        first_trade = result.trades[0]
+        entry_day_idx = trading_dates.get_loc(first_trade.entry_date)
+
+        # Signal on day 1, with wait_days=1, entry on day 2
+        assert entry_day_idx <= 3, \
+            f"Trade should open early (day 2-3), got entry on day {entry_day_idx}"
+
+    def test_trade_opens_day_one_with_wait_zero(self):
+        """With wait_days=0, trade should open on day 1 if divergence occurs then."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Formation with DIFFERENT patterns to create non-zero spread std
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],  # Different pattern
+        }, index=formation_dates)
+
+        from src.signals import calculate_spread, calculate_formation_stats
+        formation_spread = calculate_spread(
+            formation_close['A'], formation_close['B'], normalize=True
+        )
+        formation_stats = calculate_formation_stats(formation_spread)
+        formation_std = formation_stats['std']
+
+        # Day 0 same price, Day 1+ diverges
+        divergence_needed = 3.0 * formation_std
+        a_diverged_price = 100.0 * (1 + divergence_needed)
+
+        trading_a = [100.0] + [a_diverged_price] * 14 + [100.0] * 15
+        trading_b = [100.0] * 30
+
+        trading_close = pd.DataFrame({
+            'A': trading_a,
+            'B': trading_b,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=2.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+            wait_days=0,  # Same-day execution
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        assert len(result.trades) > 0, "Should open trade when diverged on day 1"
+
+        # With wait_days=0, signal on day 1 means entry on day 1
+        first_trade = result.trades[0]
+        entry_day_idx = trading_dates.get_loc(first_trade.entry_date)
+
+        assert entry_day_idx == 1, \
+            f"With wait_days=0, trade should open on day 1, got day {entry_day_idx}"
+
+
+class TestDelistingHandling:
+    """Test suite for proper delisting/data-end handling.
+
+    NOTE: Full delisting handling (exit at last valid price with calculated P&L)
+    is not yet implemented. These tests document current behavior and expectations.
+    """
+
+    def test_delisting_does_not_crash(self):
+        """When a stock stops trading (NaN), backtest should not crash.
+
+        Current limitation: Exit prices may be NaN and P&L uncalculable.
+        Future improvement: Should exit at last valid price with valid P&L.
+        """
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
+        }, index=formation_dates)
+
+        # A diverges to trigger entry, then B goes to NaN (delisted)
+        trading_a = [100.0] * 5 + [120.0] * 25  # Stays tradeable
+        trading_b = [100.0] * 5 + [100.0] * 10 + [np.nan] * 15  # Stops at day 15
+
+        trading_close = pd.DataFrame({
+            'A': trading_a,
+            'B': trading_b,
+        }, index=trading_dates)
+
+        trading_open = pd.DataFrame({
+            'A': trading_a,
+            'B': [100.0] * 5 + [100.0] * 10 + [np.nan] * 15,
+        }, index=trading_dates)
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=100,  # High so delisting triggers exit
+            capital_per_trade=10000,
+        )
+
+        # Should not crash - that's the minimum requirement
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Verify it returns a valid result structure
+        assert isinstance(result.trades, list), "Should return valid trades list"
+        assert len(result.equity_curve) > 0, "Should have equity curve"
+
+    def test_both_stocks_delist_gracefully(self):
+        """If both stocks in a pair stop trading, should handle gracefully."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
+        }, index=formation_dates)
+
+        # Both stocks stop trading midway
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [120.0] * 10 + [np.nan] * 15,
+            'B': [100.0] * 15 + [np.nan] * 15,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=100,
+            capital_per_trade=10000,
+        )
+
+        # Should not crash
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Verify it returns a valid result structure
+        assert isinstance(result.trades, list), "Should return valid trades list"
+        assert len(result.equity_curve) > 0, "Should have equity curve"
