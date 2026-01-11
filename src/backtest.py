@@ -231,10 +231,13 @@ def run_backtest_single_pair(
                 # Commission on exit
                 exit_value = (exit_price_a * position["shares_a"] +
                               exit_price_b * position["shares_b"])
-                commission = exit_value * config.commission
-                net_pnl = gross_pnl - commission
+                exit_commission = exit_value * config.commission
+                entry_commission = position["entry_commission"]
 
-                pnl_pct = net_pnl / config.capital_per_trade
+                # trade.pnl includes BOTH entry and exit commission
+                total_commission = entry_commission + exit_commission
+                trade_pnl = gross_pnl - total_commission
+                trade_pnl_pct = trade_pnl / config.capital_per_trade
 
                 trade = Trade(
                     pair=pair,
@@ -247,8 +250,8 @@ def run_backtest_single_pair(
                     exit_price_b=exit_price_b,
                     shares_a=position["shares_a"],
                     shares_b=position["shares_b"],
-                    pnl=net_pnl,
-                    pnl_pct=pnl_pct,
+                    pnl=trade_pnl,
+                    pnl_pct=trade_pnl_pct,
                     holding_days=days_held,
                     entry_distance=position["entry_distance"],
                     exit_distance=current_distance,
@@ -258,8 +261,8 @@ def run_backtest_single_pair(
                 )
                 trades.append(trade)
 
-                # Update equity
-                new_equity = equity[-1] + net_pnl
+                # Update equity (entry commission already deducted at entry)
+                new_equity = equity[-1] + gross_pnl - exit_commission
                 equity.append(new_equity)
                 equity_dates.append(exit_date)
 
@@ -338,8 +341,12 @@ def run_backtest_single_pair(
         gross_pnl = pnl_a + pnl_b
         exit_value = (exit_price_a * position["shares_a"] +
                       exit_price_b * position["shares_b"])
-        commission = exit_value * config.commission
-        net_pnl = gross_pnl - commission
+        exit_commission = exit_value * config.commission
+        entry_commission = position["entry_commission"]
+
+        # trade.pnl includes BOTH entry and exit commission
+        total_commission = entry_commission + exit_commission
+        trade_pnl = gross_pnl - total_commission
 
         days_held = len(dates) - 1 - position_entry_idx
 
@@ -354,8 +361,8 @@ def run_backtest_single_pair(
             exit_price_b=exit_price_b,
             shares_a=position["shares_a"],
             shares_b=position["shares_b"],
-            pnl=net_pnl,
-            pnl_pct=net_pnl / config.capital_per_trade,
+            pnl=trade_pnl,
+            pnl_pct=trade_pnl / config.capital_per_trade,
             holding_days=days_held,
             entry_distance=position["entry_distance"],
             exit_distance=distance.iloc[-1],
@@ -364,7 +371,8 @@ def run_backtest_single_pair(
             cycle_id=cycle_id,
         )
         trades.append(trade)
-        equity[-1] += net_pnl
+        # Update equity (entry commission already deducted at entry)
+        equity[-1] += gross_pnl - exit_commission
 
     equity_series = pd.Series(equity, index=equity_dates)
 
