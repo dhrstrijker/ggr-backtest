@@ -7,7 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.analysis import calculate_metrics, trades_to_dataframe
+from src.analysis import (
+    calculate_metrics,
+    trades_to_dataframe,
+    calculate_ggr_dollar_metrics,
+    calculate_monthly_pnl_series,
+    calculate_cumulative_pnl_series,
+)
 from src.backtest import Trade
 
 
@@ -362,3 +368,275 @@ class TestTradesToDataframe:
         assert df.iloc[0]["pnl"] == 123.45
         assert df.iloc[0]["holding_days"] == 7
         assert df.iloc[0]["direction"] == "Long"  # to_dict converts 1 to "Long"
+
+
+# -----------------------------------------------------------------------------
+# Tests for GGR Dollar-Based Metrics
+# -----------------------------------------------------------------------------
+
+
+class MockStaggeredResult:
+    """Mock StaggeredResult for testing calculate_ggr_dollar_metrics."""
+
+    def __init__(
+        self,
+        trades: list[Trade],
+        avg_active: float = 5.0,
+        total_portfolios: int = 40,
+    ):
+        self.all_trades = trades
+        self.total_portfolios = total_portfolios
+        # Create a Series that returns avg_active when .mean() is called
+        self.active_portfolios_over_time = pd.Series([avg_active] * 100)
+
+
+class TestCalculateMonthlyPnlSeries:
+    """Tests for calculate_monthly_pnl_series function."""
+
+    def test_empty_trades_returns_empty_series(self):
+        """Empty list returns empty Series."""
+        result = calculate_monthly_pnl_series([])
+        assert isinstance(result, pd.Series)
+        assert len(result) == 0
+
+    def test_aggregates_by_exit_month(self):
+        """Trades should be grouped by exit month."""
+        # Create trades in different months
+        trade1 = create_trade(pnl=100.0, holding_days=10)  # Jan
+        trade2 = create_trade(pnl=200.0, holding_days=10)  # Jan
+
+        # Modify exit dates to be in different months
+        trade1.exit_date = datetime(2024, 1, 15)
+        trade2.exit_date = datetime(2024, 1, 20)
+        trade3 = create_trade(pnl=300.0, holding_days=10)
+        trade3.exit_date = datetime(2024, 2, 15)
+
+        result = calculate_monthly_pnl_series([trade1, trade2, trade3])
+
+        assert len(result) == 2  # Two months
+        # January total: 100 + 200 = 300
+        jan_period = pd.Period("2024-01", freq="M")
+        assert result[jan_period] == 300.0
+        # February total: 300
+        feb_period = pd.Period("2024-02", freq="M")
+        assert result[feb_period] == 300.0
+
+    def test_handles_negative_pnl(self):
+        """Should correctly sum negative P&L."""
+        trade1 = create_trade(pnl=-500.0)
+        trade2 = create_trade(pnl=200.0)
+        trade1.exit_date = datetime(2024, 1, 15)
+        trade2.exit_date = datetime(2024, 1, 20)
+
+        result = calculate_monthly_pnl_series([trade1, trade2])
+
+        jan_period = pd.Period("2024-01", freq="M")
+        assert result[jan_period] == -300.0  # -500 + 200
+
+
+class TestCalculateGGRDollarMetrics:
+    """Tests for calculate_ggr_dollar_metrics function."""
+
+    def test_empty_trades_returns_empty_dict(self):
+        """Empty trades should return empty dict."""
+        result = MockStaggeredResult(trades=[])
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+        assert metrics == {}
+
+    def test_total_pnl_is_sum_of_trade_pnl(self):
+        """Total P&L should equal sum of all trade P&L."""
+        trades = [
+            create_trade(pnl=100.0),
+            create_trade(pnl=-50.0),
+            create_trade(pnl=200.0),
+        ]
+        result = MockStaggeredResult(trades=trades)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        assert metrics["total_pnl"] == 250.0  # 100 + (-50) + 200
+
+    def test_fully_invested_capital_based_on_traded_pairs(self):
+        """Fully invested capital should count unique pairs that traded."""
+        trades = [
+            create_trade(pnl=100.0, pair=("A", "B")),
+            create_trade(pnl=100.0, pair=("A", "B")),  # Same pair
+            create_trade(pnl=100.0, pair=("C", "D")),  # Different pair
+        ]
+        result = MockStaggeredResult(trades=trades)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        # 2 unique pairs: ("A", "B") and ("C", "D")
+        assert metrics["pairs_traded"] == 2
+        assert metrics["capital_fully_invested"] == 20000.0  # 2 * 10000
+
+    def test_committed_capital_uses_all_pairs_and_avg_active(self):
+        """Committed capital should use n_pairs × avg_active × capital_per_trade."""
+        trades = [create_trade(pnl=100.0)]
+        result = MockStaggeredResult(trades=trades, avg_active=4.5)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        # 10 pairs × 4.5 avg active × $10k = $450k
+        assert metrics["capital_committed"] == 450000.0
+
+    def test_return_fully_invested_calculation(self):
+        """Fully invested return = P&L / capital_fully_invested."""
+        trades = [create_trade(pnl=1000.0, pair=("A", "B"))]
+        result = MockStaggeredResult(trades=trades)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        # P&L: $1000, Capital: 1 pair × $10k = $10k
+        # Return: 1000 / 10000 = 0.10 (10%)
+        assert metrics["return_fully_invested"] == pytest.approx(0.10)
+
+    def test_return_committed_calculation(self):
+        """Committed return = P&L / capital_committed."""
+        trades = [create_trade(pnl=4500.0, pair=("A", "B"))]
+        result = MockStaggeredResult(trades=trades, avg_active=4.5)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        # P&L: $4500, Committed Capital: 10 × 4.5 × $10k = $450k
+        # Return: 4500 / 450000 = 0.01 (1%)
+        assert metrics["return_committed"] == pytest.approx(0.01)
+
+    def test_negative_pnl_gives_negative_return(self):
+        """Negative P&L should produce negative return."""
+        trades = [create_trade(pnl=-5000.0)]
+        result = MockStaggeredResult(trades=trades, avg_active=1.0)
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        assert metrics["total_pnl"] == -5000.0
+        assert metrics["return_committed"] < 0
+        assert metrics["ann_return_committed"] < 0
+
+    def test_return_sign_matches_pnl_sign(self):
+        """Return sign should always match P&L sign."""
+        # Positive P&L
+        trades_pos = [create_trade(pnl=1000.0)]
+        result_pos = MockStaggeredResult(trades=trades_pos, avg_active=1.0)
+        metrics_pos = calculate_ggr_dollar_metrics(result_pos, capital_per_trade=10000, n_pairs=10)
+
+        assert metrics_pos["total_pnl"] > 0
+        assert metrics_pos["return_committed"] > 0
+
+        # Negative P&L
+        trades_neg = [create_trade(pnl=-1000.0)]
+        result_neg = MockStaggeredResult(trades=trades_neg, avg_active=1.0)
+        metrics_neg = calculate_ggr_dollar_metrics(result_neg, capital_per_trade=10000, n_pairs=10)
+
+        assert metrics_neg["total_pnl"] < 0
+        assert metrics_neg["return_committed"] < 0
+
+    def test_sharpe_ratio_calculated(self):
+        """Sharpe ratio should be calculated from monthly returns."""
+        # Create trades across multiple months with large enough P&L
+        # to exceed the risk-free rate (2% / 12 = 0.17% monthly)
+        trades = []
+        # With avg_active=1, n_pairs=10, capital=10000 → committed = $100k
+        # Need monthly P&L > $100k * 0.17% = $170 to beat risk-free rate
+        pnl_values = [5000.0, 6000.0, 4000.0, 7000.0, 5500.0, 6500.0]  # Large varying P&L
+        for month, pnl in enumerate(pnl_values, start=1):
+            trade = create_trade(pnl=pnl)
+            trade.exit_date = datetime(2024, month, 15)
+            trades.append(trade)
+
+        result = MockStaggeredResult(trades=trades, avg_active=1.0)  # Lower avg_active
+
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        # Should have a Sharpe ratio (not testing exact value, just that it exists)
+        assert "sharpe_ratio" in metrics
+        # With returns exceeding risk-free rate, Sharpe should be positive
+        assert metrics["sharpe_ratio"] > 0
+
+    def test_max_drawdown_calculated(self):
+        """Max drawdown should be calculated from cumulative P&L."""
+        # Create trades: win, win, big loss, small win
+        # P&L: 100, 200, -500, 50 -> Cumulative: 100, 300, -200, -150
+        # Peak at 300, drawdown to -200 = -500
+        trades = []
+        pnl_values = [100.0, 200.0, -500.0, 50.0]
+        for day, pnl in enumerate(pnl_values, start=1):
+            trade = create_trade(pnl=pnl)
+            trade.exit_date = datetime(2024, 1, day * 5)
+            trades.append(trade)
+
+        result = MockStaggeredResult(trades=trades, avg_active=1.0)
+        metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
+
+        assert "max_drawdown" in metrics
+        assert "max_drawdown_pct" in metrics
+        # Max drawdown should be -500 (from peak of 300 to trough of -200)
+        assert metrics["max_drawdown"] == -500.0
+        # As pct of committed capital ($100k): -500 / 100000 = -0.5%
+        assert metrics["max_drawdown_pct"] == pytest.approx(-0.005)
+
+
+class TestCalculateCumulativePnlSeries:
+    """Tests for calculate_cumulative_pnl_series function."""
+
+    def test_empty_trades_returns_empty_series(self):
+        """Empty list returns empty Series."""
+        result = calculate_cumulative_pnl_series([])
+        assert isinstance(result, pd.Series)
+        assert len(result) == 0
+
+    def test_cumulative_sum_correct(self):
+        """Cumulative sum should add up correctly."""
+        trade1 = create_trade(pnl=100.0)
+        trade2 = create_trade(pnl=200.0)
+        trade3 = create_trade(pnl=-50.0)
+
+        # Set different exit dates
+        trade1.exit_date = datetime(2024, 1, 10)
+        trade2.exit_date = datetime(2024, 1, 15)
+        trade3.exit_date = datetime(2024, 1, 20)
+
+        result = calculate_cumulative_pnl_series([trade1, trade2, trade3])
+
+        assert len(result) == 3
+        # Cumulative: 100, 300, 250
+        assert result.iloc[0] == 100.0
+        assert result.iloc[1] == 300.0
+        assert result.iloc[2] == 250.0
+
+    def test_orders_by_date(self):
+        """Series should be ordered by exit date."""
+        trade1 = create_trade(pnl=100.0)
+        trade2 = create_trade(pnl=200.0)
+
+        # Set dates out of order
+        trade1.exit_date = datetime(2024, 2, 1)
+        trade2.exit_date = datetime(2024, 1, 1)
+
+        result = calculate_cumulative_pnl_series([trade1, trade2])
+
+        # Should be sorted by date, so trade2 (Jan) comes first
+        assert result.index[0] < result.index[1]
+        # First cumulative is 200 (trade2), second is 300 (200+100)
+        assert result.iloc[0] == 200.0
+        assert result.iloc[1] == 300.0
+
+    def test_multiple_trades_same_day(self):
+        """Trades on same day should be summed."""
+        trade1 = create_trade(pnl=100.0)
+        trade2 = create_trade(pnl=150.0)
+        trade3 = create_trade(pnl=50.0)
+
+        # All exit on same day
+        same_date = datetime(2024, 1, 15)
+        trade1.exit_date = same_date
+        trade2.exit_date = same_date
+        trade3.exit_date = same_date
+
+        result = calculate_cumulative_pnl_series([trade1, trade2, trade3])
+
+        # Should have only one entry (all same day)
+        assert len(result) == 1
+        # Total P&L: 100 + 150 + 50 = 300
+        assert result.iloc[0] == 300.0

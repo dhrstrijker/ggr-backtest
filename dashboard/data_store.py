@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -12,12 +11,17 @@ import numpy as np
 from src.data import fetch_or_load, fetch_benchmark, get_close_prices, get_open_prices
 from src.backtest import BacktestConfig, Trade
 from src.staggered import StaggeredConfig, StaggeredResult, run_staggered_backtest
-from src.analysis import calculate_staggered_metrics
+from src.analysis import (
+    calculate_staggered_metrics,
+    calculate_ggr_dollar_metrics,
+    calculate_monthly_pnl_series,
+    calculate_cumulative_pnl_series,
+)
 
 
 # Default configuration for staggered methodology
 DEFAULT_CONFIG = {
-    "symbols": ["DHT", "FRO", "ASC", "NAT", "TNK", "INSW", "STNG", "TRMD", "ZIM", "DAC", "GSL", "CMRE", "SBLK", "GNK", "SB", "DSX", "TOPS", "SHIP", "PSHG", "FLNG", "GLNG", "DLNG", "GASS", "EDRY", "GLBS", "CTRM", "PANL", "MATX", "ESEA", "NMM", "SFL", "NVGS", "KNOP", "LPG"],
+    "symbols": ["NEE", "DUK", "SO", "AEP", "SRE", "D", "EXC", "XEL", "ED", "PEG", "WEC", "ES", "ETR", "PPL", "DTE", "FE", "CMS", "CNP", "ATO", "EVRG", "LNT", "NI", "AWK", "NRG", "PNW", "OGE", "IDA", "HE", "ALE", "POR", "UGI", "SR", "BKH", "NWE"],
     "start_date": "2021-01-01",  # 5 years of data
     "end_date": "2026-01-01",
     # Staggered-specific
@@ -55,9 +59,13 @@ class DataStore:
     staggered_result_wait_0: StaggeredResult = field(default=None)
     staggered_result_wait_1: StaggeredResult = field(default=None)
 
-    # Metrics
+    # Metrics (old equal-weighted style)
     metrics_wait_0: dict = field(default=None)
     metrics_wait_1: dict = field(default=None)
+
+    # GGR Dollar-based metrics (fair metrics)
+    ggr_metrics_wait_0: dict = field(default=None)
+    ggr_metrics_wait_1: dict = field(default=None)
 
     # Aggregated pair statistics (across all cycles)
     pair_stats: dict = field(default_factory=dict)
@@ -177,6 +185,19 @@ class DataStore:
         self.metrics_wait_0 = calculate_staggered_metrics(self.staggered_result_wait_0)
         print(f"  Wait-0-Day: {len(self.staggered_result_wait_0.all_trades)} trades across {self.staggered_result_wait_0.total_portfolios} cycles")
 
+        # Calculate dollar-based GGR metrics
+        print("  Calculating dollar-based GGR metrics...")
+        self.ggr_metrics_wait_1 = calculate_ggr_dollar_metrics(
+            self.staggered_result_wait_1,
+            self.config["capital_per_trade"],
+            self.config["n_pairs"],
+        )
+        self.ggr_metrics_wait_0 = calculate_ggr_dollar_metrics(
+            self.staggered_result_wait_0,
+            self.config["capital_per_trade"],
+            self.config["n_pairs"],
+        )
+
     def _aggregate_pair_stats(self) -> None:
         """Aggregate statistics for each pair across all cycles."""
         print("\n[3/3] Aggregating pair statistics...")
@@ -224,6 +245,10 @@ class DataStore:
         """Get metrics for specified wait mode."""
         return self.metrics_wait_1 if wait_mode == 1 else self.metrics_wait_0
 
+    def get_ggr_metrics(self, wait_mode: int = 1) -> dict:
+        """Get dollar-based GGR metrics for specified wait mode."""
+        return self.ggr_metrics_wait_1 if wait_mode == 1 else self.ggr_metrics_wait_0
+
     def get_all_trades(self, wait_mode: int = 1) -> list[Trade]:
         """Get all trades for specified wait mode."""
         result = self.get_staggered_result(wait_mode)
@@ -268,6 +293,16 @@ class DataStore:
         # Calculate cumulative returns
         returns = spy_aligned / spy_aligned.iloc[0] - 1
         return returns
+
+    def get_monthly_pnl(self, wait_mode: int = 1) -> pd.Series:
+        """Get monthly P&L in dollars (not percentage returns)."""
+        trades = self.get_all_trades(wait_mode)
+        return calculate_monthly_pnl_series(trades)
+
+    def get_cumulative_pnl(self, wait_mode: int = 1) -> pd.Series:
+        """Get cumulative P&L in dollars over time."""
+        trades = self.get_all_trades(wait_mode)
+        return calculate_cumulative_pnl_series(trades)
 
     def get_trades_for_pair(self, pair: tuple, wait_mode: int = 1) -> list[Trade]:
         """Get all trades for a specific pair across all cycles."""

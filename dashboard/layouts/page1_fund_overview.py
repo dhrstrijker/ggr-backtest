@@ -12,9 +12,9 @@ def create_fund_overview_layout(data_store) -> html.Div:
     Create the Fund Overview page layout for staggered methodology.
 
     Displays:
-    - Header metrics (Annualized Return, Sharpe Ratio, Active Portfolios, Total Trades)
-    - Cumulative returns chart (monthly)
-    - Monthly returns bar chart
+    - Header metrics (Total P&L, Ann. Return, Sharpe, Max Drawdown, Win Rate, Total Trades)
+    - Cumulative P&L chart (dollars)
+    - Monthly P&L bar chart (dollars)
     - Risk metrics table
     - Trade Statistics table
     """
@@ -25,12 +25,14 @@ def create_fund_overview_layout(data_store) -> html.Div:
             "GGR Staggered Portfolio Performance"
         ),
 
-        # Header metrics row
+        # Header metrics row (6 cards for fair dollar-based metrics)
         dbc.Row([
-            dbc.Col(create_metric_card("Annualized Return", "annualized-return-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("Sharpe Ratio", "sharpe-ratio-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("Avg Active Portfolios", "active-portfolios-metric"), md=3, sm=6, className="mb-3"),
-            dbc.Col(create_metric_card("Total Trades", "total-trades-metric"), md=3, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Total P&L", "total-pnl-metric"), md=2, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Ann. Return", "annualized-return-metric"), md=2, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Sharpe Ratio", "sharpe-ratio-metric"), md=2, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Max Drawdown", "max-drawdown-metric"), md=2, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Win Rate", "win-rate-metric"), md=2, sm=6, className="mb-3"),
+            dbc.Col(create_metric_card("Total Trades", "total-trades-metric"), md=2, sm=6, className="mb-3"),
         ], className="mb-4"),
 
         # Mode indicator row
@@ -48,12 +50,12 @@ def create_fund_overview_layout(data_store) -> html.Div:
             ], width=12),
         ]),
 
-        # Cumulative returns chart
+        # Cumulative P&L chart
         dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader([
-                        html.H5("Cumulative Returns (Monthly)", className="mb-0"),
+                        html.H5("Cumulative P&L", className="mb-0"),
                     ]),
                     dbc.CardBody([
                         dcc.Graph(
@@ -66,12 +68,12 @@ def create_fund_overview_layout(data_store) -> html.Div:
             ], width=12),
         ], className="mb-4"),
 
-        # Monthly returns bar chart
+        # Monthly P&L bar chart
         dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader([
-                        html.H5("Monthly Returns", className="mb-0"),
+                        html.H5("Monthly P&L", className="mb-0"),
                     ]),
                     dbc.CardBody([
                         dcc.Graph(
@@ -106,4 +108,5 @@ def create_fund_overview_layout(data_store) -> html.Div:
                 ]),
             ], md=6, className="mb-3"),
         ]),
+
     ])

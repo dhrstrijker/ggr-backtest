@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-SYMBOLS = ['DHT', 'FRO', 'ASC', 'ECO', 'NAT', 'TNK', 'INSW', 'TRMD', 'TOPS', 'TORO', 'PSHG']
+SYMBOLS = ["NEE", "DUK", "SO", "AEP", "SRE", "D", "EXC", "XEL", "ED", "PEG", "WEC", "ES", "ETR", "PPL", "AEE", "DTE", "FE", "CMS", "CNP", "ATO", "EVRG", "LNT", "NI", "AWK", "NRG", "PNW", "OGE", "IDA", "HE", "ALE", "POR", "UGI", "SR", "BKH", "NWE"]
 START_DATE = "2021-01-01"
 END_DATE = "2026-01-01"
 

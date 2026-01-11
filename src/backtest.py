@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from .signals import (

@@ -130,35 +130,3 @@ def get_pair_stats(
     }
 
 
-def rank_all_pairs(
-    normalized_prices: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Rank all pairs by SSD and return a DataFrame with statistics.
-
-    Args:
-        normalized_prices: DataFrame with normalized prices
-
-    Returns:
-        DataFrame with all pairs ranked by SSD
-    """
-    ssd_matrix = calculate_ssd_matrix(normalized_prices)
-    symbols = normalized_prices.columns.tolist()
-
-    pairs_data = []
-    for sym_a, sym_b in combinations(symbols, 2):
-        stats = get_pair_stats(normalized_prices, (sym_a, sym_b))
-        pairs_data.append({
-            "symbol_a": sym_a,
-            "symbol_b": sym_b,
-            "ssd": stats["ssd"],
-            "correlation": stats["correlation"],
-            "spread_mean": stats["spread_mean"],
-            "spread_std": stats["spread_std"],
-        })
-
-    pairs_df = pd.DataFrame(pairs_data)
-    pairs_df = pairs_df.sort_values("ssd").reset_index(drop=True)
-    pairs_df["rank"] = range(1, len(pairs_df) + 1)
-
-    return pairs_df

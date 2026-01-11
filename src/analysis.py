@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -106,27 +105,6 @@ def calculate_metrics(
     }
 
 
-def print_metrics(metrics: dict[str, Any]) -> None:
-    """Print formatted performance metrics."""
-    print("=" * 50)
-    print("BACKTEST RESULTS")
-    print("=" * 50)
-    print(f"Total Trades:     {metrics['total_trades']}")
-    print(f"Total Return:     ${metrics['total_return']:,.2f} ({metrics['total_return_pct']:.2%})")
-    print(f"Sharpe Ratio:     {metrics['sharpe_ratio']:.2f}")
-    print(f"Max Drawdown:     ${metrics['max_drawdown']:,.2f} ({metrics['max_drawdown_pct']:.2%})")
-    print("-" * 50)
-    print(f"Win Rate:         {metrics['win_rate']:.2%}")
-    print(f"Avg Win:          ${metrics['avg_win']:,.2f}")
-    print(f"Avg Loss:         ${metrics['avg_loss']:,.2f}")
-    print(f"Profit Factor:    {metrics['profit_factor']:.2f}")
-    print(f"Avg Holding Days: {metrics['avg_holding_days']:.1f}")
-    print("-" * 50)
-    print(f"Long Trades:      {metrics['long_trades']} ({metrics['long_win_rate']:.2%} win rate)")
-    print(f"Short Trades:     {metrics['short_trades']} ({metrics['short_win_rate']:.2%} win rate)")
-    print("=" * 50)
-
-
 def trades_to_dataframe(trades: list[Trade]) -> pd.DataFrame:
     """Convert list of trades to DataFrame."""
     if not trades:
@@ -214,103 +192,6 @@ def plot_equity_curve(
     return fig
 
 
-def plot_trade(
-    close_prices: pd.DataFrame,
-    trade: Trade,
-    distance: pd.Series,
-    lookback_days: int = 60,
-) -> go.Figure:
-    """
-    Plot a single trade with price series and distance (GGR methodology).
-
-    Args:
-        close_prices: DataFrame with close prices
-        trade: Trade object to visualize
-        distance: Distance series (spread / formation_std)
-        lookback_days: Days before entry to show
-
-    Returns:
-        Plotly Figure object
-    """
-    sym_a, sym_b = trade.pair
-
-    # Find date range
-    entry_idx = close_prices.index.get_loc(trade.entry_date)
-    start_idx = max(0, entry_idx - lookback_days)
-    exit_idx = close_prices.index.get_loc(trade.exit_date)
-    end_idx = min(len(close_prices), exit_idx + 10)
-
-    date_range = close_prices.index[start_idx:end_idx]
-    prices_a = close_prices[sym_a].loc[date_range]
-    prices_b = close_prices[sym_b].loc[date_range]
-    d = distance.loc[date_range]
-
-    # Normalize for comparison
-    norm_a = prices_a / prices_a.iloc[0] * 100
-    norm_b = prices_b / prices_b.iloc[0] * 100
-
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.6, 0.4],
-        vertical_spacing=0.1,
-    )
-
-    # Price series (normalized)
-    fig.add_trace(
-        go.Scatter(
-            x=norm_a.index, y=norm_a.values,
-            mode="lines", name=sym_a,
-            line=dict(color="blue", width=2),
-        ),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=norm_b.index, y=norm_b.values,
-            mode="lines", name=sym_b,
-            line=dict(color="orange", width=2),
-        ),
-        row=1, col=1,
-    )
-
-    # Entry/exit markers
-    fig.add_vline(x=trade.entry_date, line_dash="dash", line_color="green", row=1)
-    fig.add_vline(x=trade.exit_date, line_dash="dash", line_color="red", row=1)
-    fig.add_vline(x=trade.entry_date, line_dash="dash", line_color="green", row=2)
-    fig.add_vline(x=trade.exit_date, line_dash="dash", line_color="red", row=2)
-
-    # Distance (GGR: static σ from formation)
-    fig.add_trace(
-        go.Scatter(
-            x=d.index, y=d.values,
-            mode="lines", name="Distance (σ)",
-            line=dict(color="purple", width=2),
-        ),
-        row=2, col=1,
-    )
-
-    # Threshold lines (GGR: ±2σ entry, 0 exit)
-    fig.add_hline(y=2, line_dash="dot", line_color="red", row=2,
-                  annotation_text="+2σ Entry")
-    fig.add_hline(y=-2, line_dash="dot", line_color="green", row=2,
-                  annotation_text="-2σ Entry")
-    fig.add_hline(y=0, line_dash="solid", line_color="black", row=2,
-                  annotation_text="Exit (crossing)")
-
-    direction = "Long" if trade.direction == 1 else "Short"
-    fig.update_layout(
-        title=f"{sym_a}/{sym_b} - {direction} Trade (P&L: ${trade.pnl:.2f})",
-        template="plotly_white",
-        height=600,
-        hovermode="x unified",
-    )
-    fig.update_yaxes(title_text="Normalized Price", row=1, col=1)
-    fig.update_yaxes(title_text="Distance (σ)", row=2, col=1)
-
-    return fig
-
-
 def plot_ssd_heatmap(
     ssd_matrix: pd.DataFrame,
     title: str = "SSD Heatmap (Lower = More Similar)",
@@ -340,61 +221,6 @@ def plot_ssd_heatmap(
         template="plotly_white",
         height=500,
         width=600,
-    )
-
-    return fig
-
-
-def plot_pair_prices(
-    close_prices: pd.DataFrame,
-    pair: tuple[str, str],
-    title: str | None = None,
-) -> go.Figure:
-    """
-    Plot normalized prices for a pair.
-
-    Args:
-        close_prices: DataFrame with close prices
-        pair: Tuple of (symbol_a, symbol_b)
-        title: Optional chart title
-
-    Returns:
-        Plotly Figure object
-    """
-    sym_a, sym_b = pair
-    prices_a = close_prices[sym_a]
-    prices_b = close_prices[sym_b]
-
-    # Normalize
-    norm_a = prices_a / prices_a.iloc[0] * 100
-    norm_b = prices_b / prices_b.iloc[0] * 100
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter(
-            x=norm_a.index, y=norm_a.values,
-            mode="lines", name=sym_a,
-            line=dict(width=2),
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=norm_b.index, y=norm_b.values,
-            mode="lines", name=sym_b,
-            line=dict(width=2),
-        )
-    )
-
-    if title is None:
-        title = f"{sym_a} vs {sym_b} (Normalized)"
-
-    fig.update_layout(
-        title=title,
-        xaxis_title="Date",
-        yaxis_title="Normalized Price (base 100)",
-        template="plotly_white",
-        hovermode="x unified",
     )
 
     return fig
@@ -623,92 +449,6 @@ def generate_pair_report(
         "figure": fig,
         "trades_table": pd.DataFrame(trades_data) if trades_data else pd.DataFrame(),
     }
-
-
-def print_pair_report(report: dict) -> None:
-    """Print a formatted pair report."""
-    print("=" * 70)
-    print(f"PAIR ANALYSIS: {report['pair']}")
-    print("=" * 70)
-    print(f"\nTotal Trades:      {report['total_trades']}")
-    print(f"Total P&L:         ${report['total_pnl']:,.2f}")
-    print(f"Win Rate:          {report['win_rate']:.1%}")
-    print(f"Avg Win:           ${report['avg_win']:,.2f}")
-    print(f"Avg Loss:          ${report['avg_loss']:,.2f}")
-    print(f"Avg Holding Days:  {report['avg_holding_days']:.1f}")
-    print(f"Long Trades:       {report['long_trades']}")
-    print(f"Short Trades:      {report['short_trades']}")
-    print("\nTrades:")
-    print("-" * 70)
-    if not report['trades_table'].empty:
-        print(report['trades_table'].to_string(index=False))
-    else:
-        print("No trades for this pair.")
-    print("=" * 70)
-
-
-def plot_zscore_series(
-    zscore: pd.Series,
-    entry_threshold: float = 2.0,
-    exit_threshold: float = 0.5,
-    title: str = "Z-Score Series",
-) -> go.Figure:
-    """
-    Plot z-score series with threshold lines.
-
-    Args:
-        zscore: Z-score series
-        entry_threshold: Entry threshold value
-        exit_threshold: Exit threshold value
-        title: Chart title
-
-    Returns:
-        Plotly Figure object
-    """
-    fig = go.Figure()
-
-    # Z-score line
-    fig.add_trace(
-        go.Scatter(
-            x=zscore.index, y=zscore.values,
-            mode="lines", name="Z-Score",
-            line=dict(color="purple", width=2),
-        )
-    )
-
-    # Fill areas
-    fig.add_hrect(
-        y0=entry_threshold, y1=10,
-        fillcolor="red", opacity=0.1,
-        line_width=0,
-        annotation_text="Short Entry Zone",
-    )
-    fig.add_hrect(
-        y0=-10, y1=-entry_threshold,
-        fillcolor="green", opacity=0.1,
-        line_width=0,
-        annotation_text="Long Entry Zone",
-    )
-
-    # Threshold lines
-    fig.add_hline(y=entry_threshold, line_dash="dash", line_color="red",
-                  annotation_text=f"Entry ({entry_threshold}σ)")
-    fig.add_hline(y=-entry_threshold, line_dash="dash", line_color="green",
-                  annotation_text=f"Entry (-{entry_threshold}σ)")
-    fig.add_hline(y=exit_threshold, line_dash="dot", line_color="gray",
-                  annotation_text=f"Exit ({exit_threshold}σ)")
-    fig.add_hline(y=-exit_threshold, line_dash="dot", line_color="gray")
-    fig.add_hline(y=0, line_color="black")
-
-    fig.update_layout(
-        title=title,
-        xaxis_title="Date",
-        yaxis_title="Z-Score",
-        template="plotly_white",
-        hovermode="x unified",
-    )
-
-    return fig
 
 
 # =============================================================================
@@ -1674,3 +1414,170 @@ def plot_portfolio_timeline(
     )
 
     return fig
+
+
+# -----------------------------------------------------------------------------
+# GGR Paper Dollar-Based Metrics
+# -----------------------------------------------------------------------------
+
+
+def calculate_monthly_pnl_series(trades: list[Trade]) -> pd.Series:
+    """
+    Aggregate trade P&L by exit month.
+
+    Args:
+        trades: List of Trade objects
+
+    Returns:
+        Series indexed by month Period with P&L sums
+    """
+    if not trades:
+        return pd.Series(dtype=float)
+
+    pnl_by_month = {}
+    for t in trades:
+        # Convert exit_date to Period (handles both datetime and Timestamp)
+        exit_ts = pd.Timestamp(t.exit_date)
+        month = exit_ts.to_period("M")
+        pnl_by_month[month] = pnl_by_month.get(month, 0) + t.pnl
+
+    return pd.Series(pnl_by_month).sort_index()
+
+
+def calculate_ggr_dollar_metrics(
+    result: "StaggeredResult",
+    capital_per_trade: float,
+    n_pairs: int,
+    risk_free_rate: float = 0.02,
+) -> dict[str, Any]:
+    """
+    Calculate GGR paper-style metrics using dollar values.
+
+    Per the GGR paper, returns are calculated two ways:
+    1. Fully Invested Return: Divide P&L by capital in pairs that actually traded
+    2. Committed Capital Return: Divide P&L by capital for ALL selected pairs
+
+    This function provides fair metrics based on actual P&L, not equal-weighted
+    portfolio percentages.
+
+    Args:
+        result: StaggeredResult from run_staggered_backtest()
+        capital_per_trade: Dollar amount allocated per pair trade
+        n_pairs: Number of pairs selected per portfolio cycle
+        risk_free_rate: Annual risk-free rate for Sharpe calculation
+
+    Returns:
+        Dictionary with dollar-based performance metrics
+    """
+    all_trades = result.all_trades
+    if not all_trades:
+        return {}
+
+    # Total P&L from all trades
+    total_pnl = sum(t.pnl for t in all_trades)
+
+    # Trading period
+    first_trade = pd.Timestamp(min(t.entry_date for t in all_trades))
+    last_trade = pd.Timestamp(max(t.exit_date for t in all_trades))
+    years = (last_trade - first_trade).days / 365.25
+
+    # Unique pairs that actually traded
+    pairs_traded = len(set(t.pair for t in all_trades))
+
+    # Average active portfolios
+    avg_active = result.active_portfolios_over_time.mean()
+
+    # --- Fully Invested Return (aggressive) ---
+    # Only count capital in pairs that actually traded
+    capital_fully_invested = capital_per_trade * pairs_traded
+    return_fully_invested = (
+        total_pnl / capital_fully_invested if capital_fully_invested > 0 else 0
+    )
+
+    # --- Committed Capital Return (conservative) ---
+    # Count capital for ALL selected pairs across active portfolios
+    capital_committed = capital_per_trade * n_pairs * avg_active
+    return_committed = total_pnl / capital_committed if capital_committed > 0 else 0
+
+    # Annualize returns
+    if years > 0:
+        ann_return_fully_invested = (1 + return_fully_invested) ** (1 / years) - 1
+        ann_return_committed = (1 + return_committed) ** (1 / years) - 1
+    else:
+        ann_return_fully_invested = 0
+        ann_return_committed = 0
+
+    # Monthly P&L for Sharpe ratio calculation
+    monthly_pnl = calculate_monthly_pnl_series(all_trades)
+    monthly_returns = (
+        monthly_pnl / capital_committed if capital_committed > 0 else monthly_pnl
+    )
+
+    # Sharpe ratio (annualized)
+    monthly_rf = risk_free_rate / 12
+    excess_returns = monthly_returns - monthly_rf
+    if len(excess_returns) > 1 and excess_returns.std() > 0:
+        sharpe = np.sqrt(12) * excess_returns.mean() / excess_returns.std()
+    else:
+        sharpe = 0
+
+    # Max drawdown from cumulative P&L
+    cumulative_pnl = calculate_cumulative_pnl_series(all_trades)
+    if len(cumulative_pnl) > 0:
+        # Peak (high water mark) at each point
+        rolling_max = cumulative_pnl.expanding().max()
+        drawdown = cumulative_pnl - rolling_max
+        max_drawdown = drawdown.min()  # Most negative value (in dollars)
+        # As percentage of committed capital
+        max_drawdown_pct = max_drawdown / capital_committed if capital_committed > 0 else 0
+    else:
+        max_drawdown = 0
+        max_drawdown_pct = 0
+
+    return {
+        "total_pnl": total_pnl,
+        "pairs_traded": pairs_traded,
+        "years": years,
+        # Fully Invested (aggressive)
+        "capital_fully_invested": capital_fully_invested,
+        "return_fully_invested": return_fully_invested,
+        "ann_return_fully_invested": ann_return_fully_invested,
+        # Committed Capital (conservative)
+        "capital_committed": capital_committed,
+        "return_committed": return_committed,
+        "ann_return_committed": ann_return_committed,
+        # Risk metrics
+        "sharpe_ratio": sharpe,
+        "max_drawdown": max_drawdown,
+        "max_drawdown_pct": max_drawdown_pct,
+        "avg_active_portfolios": avg_active,
+    }
+
+
+def calculate_cumulative_pnl_series(trades: list[Trade]) -> pd.Series:
+    """
+    Calculate cumulative P&L series over time.
+
+    Builds a series where P&L is added on trade exit dates.
+    Returns cumulative sum indexed by date.
+
+    Args:
+        trades: List of Trade objects
+
+    Returns:
+        Series indexed by exit date with cumulative P&L
+    """
+    if not trades:
+        return pd.Series(dtype=float)
+
+    # Group P&L by exit date
+    pnl_by_date = {}
+    for t in trades:
+        exit_ts = pd.Timestamp(t.exit_date).normalize()
+        pnl_by_date[exit_ts] = pnl_by_date.get(exit_ts, 0) + t.pnl
+
+    # Create series and calculate cumulative sum
+    daily_pnl = pd.Series(pnl_by_date).sort_index()
+    cumulative_pnl = daily_pnl.cumsum()
+
+    return cumulative_pnl

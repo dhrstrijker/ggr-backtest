@@ -8,12 +8,11 @@ Implements the original Gatev, Goetzmann, and Rouwenhorst (2006) methodology:
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 
 # =============================================================================
-# Core Functions (used by both methods)
+# Core Functions
 # =============================================================================
 
 
@@ -46,41 +45,6 @@ def calculate_spread(
 
     spread = norm_a - norm_b
     return spread
-
-
-# =============================================================================
-# Rolling Z-Score Method (Bollinger-style, NOT original GGR)
-# =============================================================================
-
-
-def calculate_zscore(
-    spread: pd.Series,
-    lookback: int = 20,
-) -> pd.Series:
-    """
-    Calculate rolling Z-score of the spread.
-
-    NOTE: This is a Bollinger-style approach, NOT the original GGR method.
-    See calculate_formation_stats() and calculate_distance() for GGR.
-
-    IMPORTANT: Uses only past data (no lookahead bias).
-    Z-score at time t uses only data from t-lookback to t.
-
-    Args:
-        spread: Spread series from calculate_spread
-        lookback: Number of periods for rolling mean/std calculation
-
-    Returns:
-        Series of Z-scores (NaN for warmup period)
-    """
-    # Rolling mean and std using ONLY past data (no lookahead)
-    rolling_mean = spread.rolling(window=lookback, min_periods=lookback).mean()
-    rolling_std = spread.rolling(window=lookback, min_periods=lookback).std()
-
-    # Z-score: (current - mean) / std
-    zscore = (spread - rolling_mean) / rolling_std
-
-    return zscore
 
 
 # =============================================================================
@@ -195,125 +159,3 @@ def generate_signals_ggr(
                     position = 0
 
     return signals
-
-
-def generate_signals(
-    zscore: pd.Series,
-    entry_threshold: float = 2.0,
-    exit_threshold: float = 0.5,
-) -> pd.Series:
-    """
-    Generate trading signals based on Z-score thresholds.
-
-    Strategy:
-    - ENTRY (Long spread): when zscore < -entry_threshold (spread too low)
-    - ENTRY (Short spread): when zscore > entry_threshold (spread too high)
-    - EXIT: when |zscore| < exit_threshold (spread normalized)
-
-    Signal values:
-    - 1: Entry long spread (buy A, sell B)
-    - -1: Entry short spread (sell A, buy B)
-    - 0: Exit or no action
-
-    Args:
-        zscore: Z-score series from calculate_zscore
-        entry_threshold: Threshold for entry (default 2.0 = 2 sigma)
-        exit_threshold: Threshold for exit (default 0.5 = 0.5 sigma)
-
-    Returns:
-        Series with signal values (1, -1, 0)
-    """
-    signals = pd.Series(index=zscore.index, data=np.nan, dtype=float)
-    position = 0  # Track current position: 0 = flat, 1 = long, -1 = short
-
-    for i, (date, z) in enumerate(zscore.items()):
-        if pd.isna(z):
-            signals.iloc[i] = 0
-            continue
-
-        if position == 0:
-            # Not in a position - look for entry
-            if z > entry_threshold:
-                # Spread too high - short the spread (sell A, buy B)
-                signals.iloc[i] = -1
-                position = -1
-            elif z < -entry_threshold:
-                # Spread too low - long the spread (buy A, sell B)
-                signals.iloc[i] = 1
-                position = 1
-            else:
-                signals.iloc[i] = 0
-        else:
-            # In a position - look for exit
-            if abs(z) < exit_threshold:
-                # Spread normalized - exit
-                signals.iloc[i] = 0
-                position = 0
-            else:
-                # Stay in position (no new signal)
-                signals.iloc[i] = 0
-
-    return signals
-
-
-def get_positions(signals: pd.Series) -> pd.Series:
-    """
-    Convert signals to position series.
-
-    Position shows the current holding at each point in time.
-
-    Args:
-        signals: Signal series from generate_signals
-
-    Returns:
-        Series with position values (1, -1, 0)
-    """
-    positions = pd.Series(index=signals.index, data=0.0)
-    position = 0
-
-    for i, (date, signal) in enumerate(signals.items()):
-        if signal == 1:
-            position = 1
-        elif signal == -1:
-            position = -1
-        elif signal == 0 and position != 0:
-            # Check if we should exit based on previous position
-            # Signal of 0 after being in position means exit
-            if i > 0 and signals.iloc[i-1] != signal:
-                position = 0
-
-        positions.iloc[i] = position
-
-    return positions
-
-
-def get_signal_dates(signals: pd.Series) -> dict:
-    """
-    Extract entry and exit dates from signal series.
-
-    Args:
-        signals: Signal series from generate_signals
-
-    Returns:
-        Dictionary with 'long_entries', 'short_entries', 'exits' lists
-    """
-    long_entries = signals[signals == 1].index.tolist()
-    short_entries = signals[signals == -1].index.tolist()
-
-    # Find exits - need to track position changes
-    exits = []
-    position = 0
-    for date, signal in signals.items():
-        if signal == 1:
-            position = 1
-        elif signal == -1:
-            position = -1
-        elif signal == 0 and position != 0:
-            exits.append(date)
-            position = 0
-
-    return {
-        "long_entries": long_entries,
-        "short_entries": short_entries,
-        "exits": exits,
-    }

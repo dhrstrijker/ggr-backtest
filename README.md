@@ -8,7 +8,8 @@ A Python implementation of the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distanc
 - **Static Formation Statistics**: Standard deviation calculated once during formation (not rolling)
 - **Proper Execution Timing**: Signals at close, execution at next-day open (no lookahead bias)
 - **Interactive Dashboard**: Visualize performance, analyze pairs, and inspect trades with correct per-cycle calculations
-- **Comprehensive Test Suite**: 188 tests covering methodology edge cases
+- **Dollar-Based Metrics**: Realized P&L tracking with fair capital allocation per GGR paper
+- **Comprehensive Test Suite**: 205 tests covering methodology edge cases
 
 ## Architecture Overview
 
@@ -199,10 +200,11 @@ pytest tests/ -v
 The interactive dashboard provides three main views:
 
 ### Fund Overview
-- Performance metrics (annualized return, Sharpe ratio, max drawdown)
-- Cumulative returns chart with SPY benchmark comparison
-- Monthly returns heatmap
-- Active portfolio count over time
+- **Header Metrics**: Total P&L, Annualized Return, Sharpe Ratio, Max Drawdown, Win Rate, Total Trades
+- **Cumulative P&L Chart**: Realized P&L over time (dollars, not misleading percentage returns)
+- **Monthly P&L Chart**: Dollar P&L per month with profit/loss coloring
+- **Risk Metrics Table**: Sharpe ratio, max drawdown, capital committed, trading period
+- **Trade Statistics Table**: Total P&L, trade counts, win rate, profit factor, avg win/loss
 
 ### Pairs Summary
 - All pairs ranked by total P&L
@@ -215,6 +217,13 @@ The interactive dashboard provides three main views:
   - Cycle selector to view different portfolio periods
   - Displays formation σ used for that cycle
 - **Trade History Table**: All trades for the pair across all cycles
+
+### Why Dollar-Based Metrics?
+
+The dashboard uses **realized P&L** rather than portfolio percentage returns because:
+- Percentage returns can be misleading when averaging across portfolios with different capital
+- Realized P&L reflects actual money made/lost from closed trades
+- Matches the GGR paper's "one-dollar long, one-dollar short" methodology
 
 ---
 
@@ -239,7 +248,7 @@ ggr-backtest/
 │   ├── data_store.py         # Pre-computed backtest results
 │   ├── layouts/              # Page layouts (fund overview, pairs, inspector)
 │   └── callbacks/            # Interactive callbacks
-├── tests/                    # 188 tests covering all methodology details
+├── tests/                    # 205 tests covering all methodology details
 │   ├── test_backtest.py
 │   ├── test_staggered.py
 │   ├── test_signals.py
@@ -380,7 +389,7 @@ flowchart TD
 
 ## Testing
 
-The test suite (188 tests) validates critical methodology assumptions:
+The test suite (205 tests) validates critical methodology assumptions:
 
 ### Backtest Tests (`test_backtest.py`)
 - Trade execution at next-day open (wait_days=1) or same-day close (wait_days=0)
@@ -404,6 +413,12 @@ The test suite (188 tests) validates critical methodology assumptions:
 - Crossing-zero exit for full mean reversion
 - Formation statistics calculated correctly
 - Distance calculation uses fixed σ
+
+### Analysis Tests (`test_analysis.py`)
+- Dollar-based GGR metrics calculation
+- Monthly and cumulative P&L series
+- Sharpe ratio from realized P&L
+- Capital allocation (fully invested vs committed)
 
 ### Data Integrity Tests (`test_data_integrity.py`)
 - Gap detection in trading data
@@ -429,6 +444,8 @@ pytest tests/ -v --cov=src
 | Execution | Next-day open |
 | Normalization | Per-trading-period start |
 | Portfolio | Staggered overlapping (~6 active) |
+| P&L Tracking | Realized (on trade exit) |
+| Capital Basis | Committed capital across active portfolios |
 
 ---
 

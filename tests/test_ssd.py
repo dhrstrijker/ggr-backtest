@@ -13,7 +13,6 @@ from src.pairs import (
     calculate_ssd_matrix,
     select_top_pairs,
     get_pair_stats,
-    rank_all_pairs,
 )
 
 
@@ -358,89 +357,3 @@ class TestGetPairStats:
         stats = get_pair_stats(normalized, ('A', 'B'))
 
         assert stats['spread_std'] > 0
-
-
-class TestRankAllPairs:
-    """Test suite for rank_all_pairs function."""
-
-    def test_returns_dataframe(self):
-        """Should return a DataFrame."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0],
-            'B': [100.0, 105.0, 115.0],
-            'C': [100.0, 120.0, 100.0],
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        assert isinstance(result, pd.DataFrame)
-
-    def test_correct_number_of_pairs(self):
-        """Should have n*(n-1)/2 pairs for n symbols."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0],
-            'B': [100.0, 105.0, 115.0],
-            'C': [100.0, 120.0, 100.0],
-            'D': [100.0, 90.0, 80.0],
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        # 4 symbols = 4*3/2 = 6 pairs
-        assert len(result) == 6
-
-    def test_has_required_columns(self):
-        """Should have all expected columns."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0],
-            'B': [100.0, 105.0, 115.0],
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        expected_columns = ['symbol_a', 'symbol_b', 'ssd', 'correlation',
-                           'spread_mean', 'spread_std', 'rank']
-        for col in expected_columns:
-            assert col in result.columns, f"Missing column: {col}"
-
-    def test_sorted_by_ssd_ascending(self):
-        """Results should be sorted by SSD ascending."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0, 130.0],
-            'B': [100.0, 110.0, 120.0, 130.0],  # Identical to A (SSD=0)
-            'C': [100.0, 200.0, 100.0, 200.0],  # Very different
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        # Check SSD is ascending
-        ssd_values = result['ssd'].tolist()
-        assert ssd_values == sorted(ssd_values), "Should be sorted by SSD ascending"
-
-    def test_rank_column_sequential(self):
-        """Rank column should be sequential starting from 1."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0],
-            'B': [100.0, 105.0, 115.0],
-            'C': [100.0, 120.0, 100.0],
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        expected_ranks = list(range(1, len(result) + 1))
-        assert result['rank'].tolist() == expected_ranks
-
-    def test_best_pair_has_rank_one(self):
-        """Pair with lowest SSD should have rank 1."""
-        prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0, 130.0],
-            'B': [100.0, 110.0, 120.0, 130.0],  # Identical to A
-            'C': [100.0, 200.0, 100.0, 200.0],  # Very different
-        })
-        normalized = normalize_prices(prices)
-        result = rank_all_pairs(normalized)
-
-        # A-B should be rank 1
-        best_pair = result[result['rank'] == 1].iloc[0]
-        assert (best_pair['symbol_a'] == 'A' and best_pair['symbol_b'] == 'B') or \
-               (best_pair['symbol_a'] == 'B' and best_pair['symbol_b'] == 'A')

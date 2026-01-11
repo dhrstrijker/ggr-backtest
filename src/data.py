@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
 
 import pandas as pd
 import requests
@@ -396,50 +394,3 @@ def get_trading_days_coverage(
     }
 
 
-def print_data_quality_report(
-    prices: pd.DataFrame,
-    start_date: str,
-    end_date: str,
-) -> None:
-    """
-    Print a comprehensive data quality report.
-
-    Args:
-        prices: DataFrame with price data
-        start_date: Expected start date
-        end_date: Expected end date
-    """
-    print("=" * 60)
-    print("DATA QUALITY REPORT")
-    print("=" * 60)
-
-    # Coverage
-    coverage = get_trading_days_coverage(prices, start_date, end_date)
-    print(f"\nDate Range: {start_date} to {end_date}")
-    print(f"Expected trading days: {coverage['total_trading_days']}")
-    print(f"Actual days in data: {coverage['actual_days']}")
-    print(f"Coverage: {coverage['coverage_pct']:.1%}")
-
-    # Gaps
-    gaps = find_data_gaps(prices, max_gap_days=5)
-    if gaps:
-        print(f"\nData Gaps Found ({len(gaps)}):")
-        for gap in gaps[:10]:  # Show first 10
-            print(f"  {gap['start_date'].date()} to {gap['end_date'].date()} ({gap['gap_days']} days)")
-        if len(gaps) > 10:
-            print(f"  ... and {len(gaps) - 10} more")
-    else:
-        print("\nNo significant data gaps found.")
-
-    # Validation issues
-    issues = validate_price_data(prices)
-    if issues:
-        print(f"\nData Issues Found ({len(issues)}):")
-        for issue in issues[:10]:
-            print(f"  - {issue}")
-        if len(issues) > 10:
-            print(f"  ... and {len(issues) - 10} more")
-    else:
-        print("\nNo data quality issues found.")
-
-    print("=" * 60)
