@@ -8,9 +8,35 @@ A Python implementation of the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distanc
 - **Static Formation Statistics**: Standard deviation calculated once during formation (not rolling)
 - **Proper Execution Timing**: Signals at close, execution at next-day open (no lookahead bias)
 - **Interactive Dashboard**: Visualize performance, analyze pairs, and inspect trades with correct per-cycle calculations
-- **Comprehensive Test Suite**: 184 tests covering methodology edge cases
+- **Comprehensive Test Suite**: 188 tests covering methodology edge cases
+
+## Architecture Overview
+
+```mermaid
+flowchart LR
+    subgraph Data["Data Layer"]
+        API[("Polygon.io")] --> CACHE[("CSV Cache")]
+    end
+
+    subgraph Core["Core Modules"]
+        DATA[data.py] --> PAIRS[pairs.py]
+        PAIRS --> STAGGERED[staggered.py]
+        STAGGERED --> BACKTEST[backtest.py]
+        BACKTEST --> SIGNALS[signals.py]
+    end
+
+    subgraph Output["Output"]
+        ANALYSIS[analysis.py]
+        DASHBOARD[Dashboard]
+    end
+
+    CACHE --> DATA
+    BACKTEST --> ANALYSIS
+    ANALYSIS --> DASHBOARD
+```
 
 ## Table of Contents
+- [Architecture Overview](#architecture-overview)
 - [The GGR Distance Method](#the-ggr-distance-method)
 - [Quick Start](#quick-start)
 - [Dashboard](#dashboard)
@@ -63,7 +89,7 @@ For each selected pair, we monitor the spread and trade when it diverges:
    Distance(t) = Spread(t) / σ_formation
    ```
 
-   **Important**: Unlike rolling Z-score methods, GGR uses a **fixed** σ calculated once during the formation period. This σ does not change during trading.
+   **Important**: GGR uses a **fixed** σ calculated once during the formation period. This σ does not change during trading.
 
 3. **Trading Signals**:
    - **Entry (Long Spread)**: When Distance < -2.0 (spread is unusually low)
@@ -76,7 +102,28 @@ For each selected pair, we monitor the spread and trade when it diverges:
 
    - **Exit**: When spread **crosses zero** (prices converge/cross)
      - Per GGR paper: Exit occurs when normalized prices intersect
-     - NOT at an arbitrary threshold like |Z| < 0.5
+
+### Signal Logic Flowchart
+
+```mermaid
+flowchart TD
+    START[New Trading Day] --> CHECK_POS{In Position?}
+
+    CHECK_POS -->|No| CHECK_ENTRY{"|distance| > 2σ?"}
+    CHECK_ENTRY -->|"Yes, dist > 0"| SHORT[Enter SHORT<br/>Sell A, Buy B]
+    CHECK_ENTRY -->|"Yes, dist < 0"| LONG[Enter LONG<br/>Buy A, Sell B]
+    CHECK_ENTRY -->|No| WAIT[No Action]
+
+    CHECK_POS -->|Yes| CHECK_EXIT{"Spread crosses 0?"}
+    CHECK_EXIT -->|Yes| EXIT[EXIT Position]
+    CHECK_EXIT -->|No| CHECK_MAX{"Holding > max days?"}
+    CHECK_MAX -->|Yes| FORCE[Force EXIT]
+    CHECK_MAX -->|No| HOLD[Hold Position]
+
+    style LONG fill:#90EE90
+    style SHORT fill:#FFB6C1
+    style EXIT fill:#87CEEB
+```
 
 ### Visual Example
 
@@ -84,14 +131,14 @@ For each selected pair, we monitor the spread and trade when it diverges:
 Price (Normalized)
     │
 1.2 │      Stock A ──────╮
-    │                     ╲    ← Spread widens (Z > 2)
+    │                     ╲    ← Spread widens (distance > 2σ)
 1.0 │─────────────────────────── Entry: Short spread
     │                     ╱
 0.8 │      Stock B ──────╯
     │
     └────────────────────────── Time
                          │
-                    Spread reverts, exit when Z < 0.5
+                    Spread reverts, exit when prices cross
 ```
 
 ### Why It Works (Theory)
@@ -192,7 +239,7 @@ ggr-backtest/
 │   ├── data_store.py         # Pre-computed backtest results
 │   ├── layouts/              # Page layouts (fund overview, pairs, inspector)
 │   └── callbacks/            # Interactive callbacks
-├── tests/                    # 184 tests covering all methodology details
+├── tests/                    # 188 tests covering all methodology details
 │   ├── test_backtest.py
 │   ├── test_staggered.py
 │   ├── test_signals.py
@@ -208,8 +255,11 @@ Default parameters in `dashboard/data_store.py`:
 
 ```python
 DEFAULT_CONFIG = {
-    # Universe - tanker stocks for pair formation
-    "symbols": ["DHT", "FRO", "ASC", "ECO", "NAT", "TNK", "INSW", "TRMD", "TOPS", "TORO", "PSHG"],
+    # Universe - shipping/energy stocks for pair formation
+    "symbols": ["DHT", "FRO", "ASC", "NAT", "TNK", "INSW", "STNG", "TRMD", "ZIM", "DAC",
+                "GSL", "CMRE", "SBLK", "GNK", "SB", "DSX", "TOPS", "SHIP", "PSHG", "FLNG",
+                "GLNG", "DLNG", "GASS", "EDRY", "GLBS", "CTRM", "PANL", "MATX", "ESEA",
+                "NMM", "SFL", "NVGS", "KNOP", "LPG"],
 
     # Date range
     "start_date": "2021-01-01",
@@ -219,7 +269,7 @@ DEFAULT_CONFIG = {
     "formation_days": 252,        # 12 months - pair selection + σ calculation
     "trading_days": 126,          # 6 months - active trading period
     "overlap_days": 21,           # ~1 month between new portfolio starts
-    "n_pairs": 20,                # Top pairs per portfolio cycle
+    "n_pairs": 10,                # Top pairs per portfolio cycle
     "min_data_pct": 0.95,         # Minimum data coverage required
 
     # Backtest parameters
@@ -237,7 +287,7 @@ DEFAULT_CONFIG = {
 | `formation_days` | 252 | Formation period (~12 months) for SSD calculation and σ |
 | `trading_days` | 126 | Trading period (~6 months) per portfolio |
 | `overlap_days` | 21 | Days between portfolio starts (~1 month) |
-| `n_pairs` | 20 | Number of top pairs selected per cycle |
+| `n_pairs` | 10 | Number of top pairs selected per cycle |
 
 ### Execution Modes
 
@@ -246,7 +296,7 @@ DEFAULT_CONFIG = {
 | 1 (default) | Next-day OPEN | Signal at close, execute at next open (reduces bid-ask bounce) |
 | 0 | Same-day CLOSE | Execute immediately at signal close |
 
-**Note**: Per GGR methodology, exits occur when the spread crosses zero (prices converge), not at an arbitrary threshold.
+**Note**: Per GGR methodology, exits occur when the spread crosses zero (prices converge).
 
 ---
 
@@ -256,49 +306,69 @@ DEFAULT_CONFIG = {
 
 The implementation follows the GGR paper's staggered approach:
 
+```mermaid
+gantt
+    title Portfolio Rotation Timeline
+    dateFormat YYYY-MM
+    axisFormat %b %Y
+
+    section Cycle 0
+    Formation (12mo)    :form0, 2022-01, 365d
+    Trading (6mo)       :trade0, after form0, 182d
+
+    section Cycle 1
+    Formation           :form1, 2022-02, 365d
+    Trading             :trade1, after form1, 182d
+
+    section Cycle 2
+    Formation           :form2, 2022-03, 365d
+    Trading             :trade2, after form2, 182d
 ```
-Timeline:
-─────────────────────────────────────────────────────────────────────
-Cycle 0: |── Formation (252d) ──|── Trading (126d) ──|
-Cycle 1:      |── Formation ──────|── Trading ────────|  (starts +21d)
-Cycle 2:           |── Formation ──|── Trading ───────|  (starts +42d)
-...
-─────────────────────────────────────────────────────────────────────
-At steady state: ~6 portfolios active simultaneously
+
+At steady state: **~6 portfolios active simultaneously**
 Monthly return = arithmetic average across active portfolios
-```
 
 ### Data Flow
 
-```
-Polygon.io API → fetch_or_load() → CSV cache → close_prices / open_prices
-                                                        ↓
-                              generate_portfolio_cycles() (staggered schedule)
-                                                        ↓
-                    ┌───────────────────────────────────────────────────────┐
-                    │  For each cycle:                                      │
-                    │    1. filter_valid_symbols() (min 95% data coverage)  │
-                    │    2. normalize_prices() → calculate_ssd_matrix()     │
-                    │    3. select_top_pairs() (top 20 by SSD)              │
-                    │    4. For each pair:                                  │
-                    │         calculate_formation_stats() → static σ        │
-                    │         run_backtest_single_pair()                    │
-                    │           - Entry: |distance| > 2σ                    │
-                    │           - Exit: spread crosses zero                 │
-                    └───────────────────────────────────────────────────────┘
-                                                        ↓
-                              aggregate_monthly_returns() (arithmetic mean)
-                                                        ↓
-                              calculate_staggered_metrics()
+```mermaid
+flowchart TD
+    subgraph Input["1. Data Acquisition"]
+        A[Polygon.io API] --> B[fetch_or_load]
+        B --> C[(CSV Cache)]
+        C --> D[close_prices<br/>open_prices]
+    end
+
+    subgraph Staggered["2. Portfolio Generation"]
+        D --> E[generate_portfolio_cycles]
+        E --> F[Monthly rotation schedule]
+    end
+
+    subgraph Cycle["3. Per-Cycle Processing"]
+        F --> G[filter_valid_symbols]
+        G --> H[normalize_prices]
+        H --> I[calculate_ssd_matrix]
+        I --> J[select_top_pairs]
+    end
+
+    subgraph Backtest["4. Per-Pair Backtest"]
+        J --> K[calculate_formation_stats<br/>Static σ]
+        K --> L[calculate_distance]
+        L --> M[run_backtest_single_pair]
+    end
+
+    subgraph Output["5. Results"]
+        M --> N[aggregate_monthly_returns]
+        N --> O[StaggeredResult]
+    end
 ```
 
 ### Key Implementation Details
 
 1. **No Lookahead Bias**: Trades execute at the OPEN of the day AFTER the signal is generated. The signal uses the closing price, but execution happens at next-day open.
 
-2. **Static σ (GGR Methodology)**: Unlike Bollinger-style approaches that use rolling statistics, the GGR method calculates standard deviation **once** during the formation period. This σ remains fixed throughout the trading period.
+2. **Static σ (GGR Methodology)**: The GGR method calculates standard deviation **once** during the formation period. This σ remains fixed throughout the trading period.
 
-3. **Crossing Zero Exit**: Per the original GGR paper, positions are closed when normalized prices **cross** (spread = 0), not when they reach an arbitrary threshold like |Z| < 0.5.
+3. **Crossing Zero Exit**: Per the original GGR paper, positions are closed when normalized prices **cross** (spread = 0), indicating full mean reversion.
 
 4. **Per-Cycle Normalization**: Prices are normalized from the START of each trading period, not from the beginning of all data. This is critical for correct distance calculation.
 
@@ -310,7 +380,7 @@ Polygon.io API → fetch_or_load() → CSV cache → close_prices / open_prices
 
 ## Testing
 
-The test suite (184 tests) validates critical methodology assumptions:
+The test suite (188 tests) validates critical methodology assumptions:
 
 ### Backtest Tests (`test_backtest.py`)
 - Trade execution at next-day open (wait_days=1) or same-day close (wait_days=0)
@@ -331,7 +401,7 @@ The test suite (184 tests) validates critical methodology assumptions:
 
 ### Signal Tests (`test_signals.py`)
 - Entry triggers when |distance| > 2σ (static from formation)
-- Crossing-zero exit (not arbitrary threshold)
+- Crossing-zero exit for full mean reversion
 - Formation statistics calculated correctly
 - Distance calculation uses fixed σ
 
@@ -350,15 +420,15 @@ pytest tests/ -v --cov=src
 
 ---
 
-## Key Differences from Other Implementations
+## GGR Method Key Characteristics
 
-| Aspect | GGR Method (this repo) | Common Alternatives |
-|--------|------------------------|---------------------|
-| σ calculation | Static (formation period only) | Rolling window |
-| Exit condition | Spread crosses zero | Arbitrary threshold (e.g., 0.5σ) |
-| Execution | Next-day open | Same-day close |
-| Normalization | Per-trading-period start | Global (data start) |
-| Portfolio | Staggered overlapping | Single portfolio |
+| Aspect | GGR Implementation |
+|--------|-------------------|
+| σ calculation | Static (formation period only) |
+| Exit condition | Spread crosses zero |
+| Execution | Next-day open |
+| Normalization | Per-trading-period start |
+| Portfolio | Staggered overlapping (~6 active) |
 
 ---
 
