@@ -7,11 +7,16 @@ GGR Distance Method pairs trading backtest results.
 
 Usage:
     python dashboard.py [--port PORT] [--debug] [--config CONFIG_FILE]
+    python dashboard.py --us-market        # Run with S&P 500 universe
+    python dashboard.py --tech             # Run with tech sector
+    python dashboard.py --shipping         # Run with shipping sector
+    python dashboard.py --utilities        # Run with utilities sector (default)
 
 Examples:
     python dashboard.py                    # Run on default port 8050
     python dashboard.py --port 8080        # Run on custom port
     python dashboard.py --debug            # Run in debug mode
+    python dashboard.py --us-market        # Use S&P 500 universe
 """
 
 import argparse
@@ -24,7 +29,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from dashboard.app import create_app
-from dashboard.data_store import DataStore, DEFAULT_CONFIG
+from dashboard.data_store import DataStore
 
 
 def parse_args():
@@ -33,10 +38,16 @@ def parse_args():
         description="GGR Pairs Trading Dashboard",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Sector Presets:
+    --us-market    S&P 500 universe (~500 stocks)
+    --tech         Technology sector (~50 stocks)
+    --shipping     Shipping sector (~20 stocks)
+    --utilities    Utilities sector (~34 stocks, default)
+
 Examples:
-    python dashboard.py                    # Run on default port 8050
-    python dashboard.py --port 8080        # Run on custom port
-    python dashboard.py --debug            # Run in debug mode
+    python dashboard.py                    # Run with utilities (default)
+    python dashboard.py --us-market        # Run with S&P 500
+    python dashboard.py --tech --port 8080 # Run tech sector on port 8080
     python dashboard.py --config my_config.json  # Use custom config
         """,
     )
@@ -55,41 +66,89 @@ Examples:
     )
 
     parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to JSON config file (optional)",
-    )
-
-    parser.add_argument(
         "--host",
         type=str,
         default="127.0.0.1",
         help="Host to bind to (default: 127.0.0.1)",
     )
 
+    # Sector selection (mutually exclusive)
+    sector_group = parser.add_mutually_exclusive_group()
+    sector_group.add_argument(
+        "--us-market",
+        action="store_true",
+        help="Use S&P 500 universe (~500 stocks)",
+    )
+    sector_group.add_argument(
+        "--tech",
+        action="store_true",
+        help="Use technology sector (~50 stocks)",
+    )
+    sector_group.add_argument(
+        "--shipping",
+        action="store_true",
+        help="Use shipping sector (~20 stocks)",
+    )
+    sector_group.add_argument(
+        "--utilities",
+        action="store_true",
+        help="Use utilities sector (~34 stocks, default)",
+    )
+    sector_group.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to custom JSON config file",
+    )
+
     return parser.parse_args()
 
 
-def load_config(config_path: str | None) -> dict:
-    """Load configuration from file or use defaults."""
-    if config_path is None:
-        print("Using default configuration")
-        return DEFAULT_CONFIG.copy()
+# Mapping of sector flags to config file paths
+SECTOR_CONFIG_MAP = {
+    "us_market": "configs/sectors/us_market.json",
+    "tech": "configs/sectors/tech.json",
+    "shipping": "configs/sectors/shipping.json",
+    "utilities": "configs/sectors/utilities.json",
+}
 
+
+def load_config_file(config_path: str) -> dict:
+    """Load configuration from a JSON file."""
     config_file = Path(config_path)
     if not config_file.exists():
-        print(f"Warning: Config file {config_path} not found, using defaults")
-        return DEFAULT_CONFIG.copy()
+        raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    print(f"Loading configuration from {config_path}")
     with open(config_file) as f:
         config = json.load(f)
 
-    # Merge with defaults for any missing keys
-    merged = DEFAULT_CONFIG.copy()
-    merged.update(config)
-    return merged
+    return config
+
+
+def resolve_sector_config(args) -> dict:
+    """
+    Resolve sector flag or config path to a configuration dict.
+
+    Priority:
+    1. --config path (custom config file)
+    2. Sector flags (--us-market, --tech, --shipping, --utilities)
+    3. Default to utilities if no flag specified
+    """
+    # Check for custom config path first
+    if args.config:
+        print(f"Loading custom configuration from {args.config}")
+        return load_config_file(args.config)
+
+    # Check sector flags
+    for sector, config_path in SECTOR_CONFIG_MAP.items():
+        flag_name = sector.replace("_", "-")  # us_market -> us-market
+        if getattr(args, sector.replace("-", "_"), False):
+            print(f"Loading {sector} sector configuration")
+            return load_config_file(config_path)
+
+    # Default to utilities
+    print("Using default configuration (utilities sector)")
+    return load_config_file(SECTOR_CONFIG_MAP["utilities"])
 
 
 def main():
@@ -101,8 +160,11 @@ def main():
     print("=" * 60)
     print()
 
-    # Load configuration
-    config = load_config(args.config)
+    # Load configuration based on sector flag or custom config
+    config = resolve_sector_config(args)
+    sector_name = config.get("name", "Unknown")
+    print(f"Sector: {sector_name} ({len(config.get('symbols', []))} symbols)")
+    print()
 
     # Initialize data store and load/compute data
     print("Initializing data store...")

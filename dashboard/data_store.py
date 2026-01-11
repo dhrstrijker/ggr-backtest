@@ -10,32 +10,19 @@ import numpy as np
 
 from src.data import fetch_or_load, fetch_benchmark, get_close_prices, get_open_prices
 from src.backtest import BacktestConfig, Trade
-from src.staggered import StaggeredConfig, StaggeredResult, run_staggered_backtest
+from src.staggered import (
+    StaggeredConfig,
+    StaggeredResult,
+    run_staggered_backtest,
+    precompute_formations,
+    run_backtest_only,
+)
 from src.analysis import (
     calculate_staggered_metrics,
     calculate_ggr_dollar_metrics,
     calculate_monthly_pnl_series,
     calculate_cumulative_pnl_series,
 )
-
-
-# Default configuration for staggered methodology
-DEFAULT_CONFIG = {
-    "symbols": ["NEE", "DUK", "SO", "AEP", "SRE", "D", "EXC", "XEL", "ED", "PEG", "WEC", "ES", "ETR", "PPL", "DTE", "FE", "CMS", "CNP", "ATO", "EVRG", "LNT", "NI", "AWK", "NRG", "PNW", "OGE", "IDA", "HE", "ALE", "POR", "UGI", "SR", "BKH", "NWE"],
-    "start_date": "2021-01-01",  # 5 years of data
-    "end_date": "2026-01-01",
-    # Staggered-specific
-    "formation_days": 252,
-    "trading_days": 126,
-    "overlap_days": 21,
-    "n_pairs": 10,
-    "min_data_pct": 0.95,
-    # Backtest
-    "entry_threshold": 2.0,
-    "max_holding_days": 126,
-    "capital_per_trade": 10000.0,
-    "commission": 0.001,
-}
 
 
 @dataclass
@@ -47,8 +34,8 @@ class DataStore:
     Pre-computes results for both Wait-0-Day and Wait-1-Day modes.
     """
 
-    # Configuration
-    config: dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
+    # Configuration (loaded from configs/sectors/*.json via dashboard.py)
+    config: dict = field(default_factory=dict)
 
     # Price data
     close_prices: pd.DataFrame = field(default=None)
@@ -70,15 +57,14 @@ class DataStore:
     # Aggregated pair statistics (across all cycles)
     pair_stats: dict = field(default_factory=dict)
 
-    def load_or_compute(self, config: dict | None = None) -> None:
+    def load_or_compute(self, config: dict) -> None:
         """
         Load data and compute staggered backtest results for both wait modes.
 
         Args:
-            config: Optional configuration dict (uses DEFAULT_CONFIG if not provided)
+            config: Configuration dict loaded from configs/sectors/*.json
         """
-        if config is not None:
-            self.config = config
+        self.config = config
 
         print("=" * 60)
         print("GGR Staggered Portfolio Methodology")
@@ -130,56 +116,66 @@ class DataStore:
         print(f"  SPY data loaded: {len(self.spy_prices)} days")
 
     def _run_staggered_backtests(self) -> None:
-        """Run staggered backtests for both wait modes."""
+        """Run staggered backtests for both wait modes efficiently.
+
+        Uses precompute_formations() to compute SSD matrices and pair selection
+        once, then runs backtests for both wait modes using run_backtest_only().
+        This eliminates redundant computation (~50% speedup).
+        """
         print("\n[2/3] Running staggered backtests...")
 
-        # Create staggered config for Wait-1-Day (default)
-        staggered_config_wait_1 = StaggeredConfig(
+        # Create base staggered config (wait-mode independent)
+        base_config = StaggeredConfig(
             formation_days=self.config["formation_days"],
             trading_days=self.config["trading_days"],
             overlap_days=self.config["overlap_days"],
             n_pairs=self.config["n_pairs"],
-            min_data_pct=self.config["min_data_pct"],
-            backtest_config=BacktestConfig(
-                entry_threshold=self.config["entry_threshold"],
-                max_holding_days=self.config["max_holding_days"],
-                capital_per_trade=self.config["capital_per_trade"],
-                commission=self.config["commission"],
-                wait_days=1,
-            ),
+        )
+
+        # Phase 1: Precompute formations (SSD matrices, pair selection) - ONCE
+        print("  Precomputing formations (shared between wait modes)...")
+        precomputed = precompute_formations(
+            self.close_prices,
+            base_config,
+            progress_callback=lambda i, n: print(f"    Cycle {i}/{n}") if i % 10 == 0 else None,
+        )
+        print(f"  Precomputed {len(precomputed.cycles)} cycles")
+
+        # Phase 2a: Run Wait-1-Day backtest
+        backtest_config_wait_1 = BacktestConfig(
+            entry_threshold=self.config["entry_threshold"],
+            max_holding_days=self.config["max_holding_days"],
+            capital_per_trade=self.config["capital_per_trade"],
+            commission=self.config["commission"],
+            wait_days=1,
         )
 
         print("  Running Wait-1-Day backtest...")
-        self.staggered_result_wait_1 = run_staggered_backtest(
+        self.staggered_result_wait_1 = run_backtest_only(
+            precomputed,
             self.close_prices,
             self.open_prices,
-            staggered_config_wait_1,
+            backtest_config_wait_1,
             progress_callback=lambda i, n: print(f"    Cycle {i}/{n}") if i % 10 == 0 else None,
         )
         self.metrics_wait_1 = calculate_staggered_metrics(self.staggered_result_wait_1)
         print(f"  Wait-1-Day: {len(self.staggered_result_wait_1.all_trades)} trades across {self.staggered_result_wait_1.total_portfolios} cycles")
 
-        # Create staggered config for Wait-0-Day
-        staggered_config_wait_0 = StaggeredConfig(
-            formation_days=self.config["formation_days"],
-            trading_days=self.config["trading_days"],
-            overlap_days=self.config["overlap_days"],
-            n_pairs=self.config["n_pairs"],
-            min_data_pct=self.config["min_data_pct"],
-            backtest_config=BacktestConfig(
-                entry_threshold=self.config["entry_threshold"],
-                max_holding_days=self.config["max_holding_days"],
-                capital_per_trade=self.config["capital_per_trade"],
-                commission=self.config["commission"],
-                wait_days=0,
-            ),
+        # Phase 2b: Run Wait-0-Day backtest
+        backtest_config_wait_0 = BacktestConfig(
+            entry_threshold=self.config["entry_threshold"],
+            max_holding_days=self.config["max_holding_days"],
+            capital_per_trade=self.config["capital_per_trade"],
+            commission=self.config["commission"],
+            wait_days=0,
         )
 
         print("  Running Wait-0-Day backtest...")
-        self.staggered_result_wait_0 = run_staggered_backtest(
+        self.staggered_result_wait_0 = run_backtest_only(
+            precomputed,
             self.close_prices,
             self.open_prices,
-            staggered_config_wait_0,
+            backtest_config_wait_0,
             progress_callback=lambda i, n: print(f"    Cycle {i}/{n}") if i % 10 == 0 else None,
         )
         self.metrics_wait_0 = calculate_staggered_metrics(self.staggered_result_wait_0)

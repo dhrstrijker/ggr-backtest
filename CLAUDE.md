@@ -53,6 +53,20 @@ Polygon.io API → src/data.py (fetch + cache) → src/pairs.py (SSD matrix)
 
 4. **No Lookahead**: Signals generated at close, trades execute at **next-day open**
 
+5. **Formation Filtering**: Symbols must have **100% data coverage** during the 12-month formation period. No filtering based on trading period (that would be look-ahead bias).
+
+6. **Delisting Handling**: If a stock delists during trading, close position at last available price with `exit_reason='delisting'`.
+
+### NaN Handling (UNION Data Alignment)
+
+Data uses UNION of dates (all trading days) rather than INTERSECTION. This allows symbols with different listing periods to coexist:
+
+- **`normalize_prices()`**: Drops columns where first price is NaN
+- **`calculate_ssd()`**: Requires 50% overlap; returns `inf` for pairs with insufficient data
+- **`filter_valid_symbols()`**: 100% formation coverage required (no `min_data_pct` threshold)
+- **Entry validation**: Skips trade entry if prices are NaN
+- **Exit safety**: Uses last valid prices when end-of-data prices are NaN
+
 ### Function Signatures
 
 ```python
@@ -80,15 +94,40 @@ run_staggered_backtest(
 
 ### Trade Object
 
-`Trade` dataclass uses `entry_distance` and `exit_distance` (distance in σ units). Exit reasons: `'crossing'`, `'max_holding'`, `'end_of_data'`.
+`Trade` dataclass uses `entry_distance` and `exit_distance` (distance in σ units). Exit reasons: `'crossing'`, `'max_holding'`, `'end_of_data'`, `'delisting'`.
 
 ### Dashboard
 
 Interactive Dash web app in `dashboard/` directory:
-- **`dashboard.py`**: Main entry point (`python dashboard.py --port 8050`)
+- **`dashboard.py`**: Main entry point with sector CLI flags
 - **`dashboard/data_store.py`**: Centralized data management, runs full backtest pipeline
 - **`dashboard/layouts/`**: Page layouts (Fund Overview, Pair Inspector, Pairs Summary)
 - **`dashboard/callbacks/`**: Interactive callbacks for each page
+
+#### Sector CLI Flags
+
+```bash
+python dashboard.py --utilities     # Utilities sector (default, ~34 stocks)
+python dashboard.py --tech          # Technology sector (~50 stocks)
+python dashboard.py --shipping      # Shipping sector (~20 stocks)
+python dashboard.py --us-market     # S&P 500 universe (~500 stocks)
+python dashboard.py --config path/to/config.json  # Custom config
+```
+
+### Configuration
+
+All configuration is centralized in `configs/sectors/` as JSON files (no hardcoded defaults in code):
+
+```
+configs/
+└── sectors/
+    ├── utilities.json    # Default sector (~34 stocks)
+    ├── tech.json         # Technology (~50 stocks)
+    ├── shipping.json     # Shipping (~20 stocks)
+    └── us_market.json    # S&P 500 (~500 stocks)
+```
+
+Config files specify: `symbols`, `start_date`, `end_date`, `formation_days`, `trading_days`, `overlap_days`, `n_pairs`, `entry_threshold`, `max_holding_days`, `capital_per_trade`, `commission`.
 
 ## Environment
 

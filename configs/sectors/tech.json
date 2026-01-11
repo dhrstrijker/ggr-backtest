@@ -1,0 +1,21 @@
+{
+  "name": "Tech",
+  "description": "Large and mid-cap technology companies",
+  "symbols": [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "INTC", "CRM",
+    "ORCL", "ADBE", "NOW", "SNOW", "PLTR", "IBM", "CSCO", "QCOM", "TXN", "AVGO",
+    "MU", "AMAT", "LRCX", "KLAC", "MRVL", "ADI", "NXPI", "ON", "MCHP", "SWKS",
+    "CDNS", "SNPS", "ANSS", "TEAM", "DDOG", "ZS", "CRWD", "PANW", "FTNT", "NET",
+    "OKTA", "MDB", "SPLK", "WDAY", "VEEV", "DOCU", "ZM", "TWLO", "SQ", "PYPL"
+  ],
+  "start_date": "2015-01-01",
+  "end_date": "2026-01-01",
+  "formation_days": 252,
+  "trading_days": 126,
+  "overlap_days": 21,
+  "n_pairs": 15,
+  "entry_threshold": 2.0,
+  "max_holding_days": 126,
+  "capital_per_trade": 10000.0,
+  "commission": 0.001
+}

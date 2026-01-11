@@ -126,7 +126,6 @@ class TestStaggeredConfig:
         assert config.trading_days == 126
         assert config.overlap_days == 21
         assert config.n_pairs == 20
-        assert config.min_data_pct == 0.95
         assert isinstance(config.backtest_config, BacktestConfig)
 
     def test_custom_values(self):
@@ -137,14 +136,12 @@ class TestStaggeredConfig:
             trading_days=63,
             overlap_days=14,
             n_pairs=10,
-            min_data_pct=0.90,
             backtest_config=backtest_config,
         )
         assert config.formation_days == 189
         assert config.trading_days == 63
         assert config.overlap_days == 14
         assert config.n_pairs == 10
-        assert config.min_data_pct == 0.90
         assert config.backtest_config.entry_threshold == 2.5
         assert config.backtest_config.wait_days == 0
 
@@ -243,59 +240,60 @@ class TestGeneratePortfolioCycles:
 
 
 class TestFilterValidSymbols:
-    """Tests for filter_valid_symbols function."""
+    """Tests for filter_valid_symbols function.
+
+    Per GGR methodology: Only filter based on formation period with 100% coverage.
+    No look-ahead to trading period (that would be look-ahead bias).
+    """
 
     def test_all_valid_symbols_returned(self, short_sample_prices):
-        """Test that all symbols are returned when data is complete."""
+        """Test that all symbols are returned when data is complete during formation."""
         close_prices, _ = short_sample_prices
+        # Use formation period dates (not trading_end)
         valid = filter_valid_symbols(
             close_prices,
             close_prices.index[0],
             close_prices.index[-1],
-            min_data_pct=0.95,
         )
         assert len(valid) == len(close_prices.columns)
 
     def test_filters_symbols_with_missing_data(self, prices_with_missing_data):
-        """Test that symbols with insufficient data are filtered out."""
+        """Test that symbols with any missing data in formation are filtered out."""
         close_prices, _ = prices_with_missing_data
 
-        # Test with full date range - C and D have missing data
+        # Test with full date range as formation - C and D have missing data
+        # Now requires 100% coverage, so any NaN in formation period fails
         valid = filter_valid_symbols(
             close_prices,
             close_prices.index[0],
             close_prices.index[-1],
-            min_data_pct=0.95,
         )
 
         # A and B should be valid (complete data)
         assert "A" in valid
         assert "B" in valid
-        # C starts late, D ends early - may or may not pass depending on threshold
-        # With 95% threshold and 500 days, C is missing 100 (20%), D missing 50 (10%)
-        assert "C" not in valid  # Missing 20%
-        # D might pass depending on exact calculation
+        # C starts late, D ends early - both have NaN in the range
+        assert "C" not in valid  # Has NaN at start
+        assert "D" not in valid  # Has NaN at end
 
-    def test_respects_min_data_pct_threshold(self, prices_with_missing_data):
-        """Test that min_data_pct threshold is respected."""
+    def test_requires_100_percent_coverage(self, prices_with_missing_data):
+        """Test that 100% coverage is required (no threshold parameter)."""
         close_prices, _ = prices_with_missing_data
 
-        # With lower threshold, more symbols should pass
-        valid_strict = filter_valid_symbols(
+        # Per GGR methodology: formation period requires 100% coverage
+        # This ensures valid sigma calculation
+        valid = filter_valid_symbols(
             close_prices,
             close_prices.index[0],
             close_prices.index[-1],
-            min_data_pct=0.95,
         )
 
-        valid_lenient = filter_valid_symbols(
-            close_prices,
-            close_prices.index[0],
-            close_prices.index[-1],
-            min_data_pct=0.70,
-        )
-
-        assert len(valid_lenient) >= len(valid_strict)
+        # Only symbols with complete data should be included
+        for symbol in valid:
+            formation_data = close_prices[symbol].loc[
+                close_prices.index[0]:close_prices.index[-1]
+            ]
+            assert formation_data.notna().all(), f"{symbol} has NaN values"
 
     def test_empty_range_returns_empty(self, short_sample_prices):
         """Test that invalid date range returns empty list."""
@@ -306,7 +304,6 @@ class TestFilterValidSymbols:
             close_prices,
             pd.Timestamp("2025-01-01"),
             pd.Timestamp("2025-12-31"),
-            min_data_pct=0.95,
         )
         assert len(valid) == 0
 
@@ -590,7 +587,6 @@ class TestStaggeredWithMissingData:
             trading_days=75,
             overlap_days=30,
             n_pairs=2,
-            min_data_pct=0.95,
         )
 
         result = run_staggered_backtest(close_prices, open_prices, config)

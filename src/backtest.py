@@ -41,7 +41,7 @@ class Trade:
     holding_days: int
     entry_distance: float  # Distance in σ at entry
     exit_distance: float  # Distance in σ at exit
-    exit_reason: str  # 'crossing', 'max_holding', 'end_of_data'
+    exit_reason: str  # 'crossing', 'max_holding', 'end_of_data', 'delisting'
     max_adverse_spread: float  # Maximum adverse spread (in sigma) during trade
     cycle_id: int | None = None  # Which cycle generated this trade (for staggered)
 
@@ -147,25 +147,100 @@ def run_backtest_single_pair(
     # Calculate distance using STATIC formation σ
     distance = calculate_distance(trading_spread, formation_std)
 
+    # Pre-extract values to NumPy arrays for faster loop access
+    # This avoids pandas .iloc[] overhead which can be significant for long loops
+    # Note: dates kept as list to preserve pandas Timestamp type (for strftime compatibility)
+    dates = trading_close.index.tolist()
+    spread_arr = trading_spread.to_numpy()
+    distance_arr = distance.to_numpy()
+    close_a_arr = trading_close[sym_a].to_numpy()
+    close_b_arr = trading_close[sym_b].to_numpy()
+    open_a_arr = trading_open[sym_a].to_numpy()
+    open_b_arr = trading_open[sym_b].to_numpy()
+    n_days = len(dates)
+
     # Track trades and equity
     trades = []
     equity = [config.capital_per_trade]
-    equity_dates = [trading_close.index[0]]
+    equity_dates = [dates[0]]
 
     # Current position state
     position = None
     position_entry_idx = None
 
-    dates = trading_close.index.tolist()
     entry_level = config.entry_threshold  # In σ units
 
-    for i in range(len(dates) - 1):  # -1 because we execute next day
+    for i in range(n_days - 1):  # -1 because we execute next day
         current_date = dates[i]
         next_date = dates[i + 1]
-        current_spread = trading_spread.iloc[i]
-        current_distance = distance.iloc[i]
+        current_spread = spread_arr[i]
+        current_distance = distance_arr[i]
 
-        # Skip if no valid spread
+        # Get current prices for delisting detection
+        current_price_a = close_a_arr[i]
+        current_price_b = close_b_arr[i]
+
+        # Check for delisting (NaN prices) when we have an open position
+        if position is not None:
+            is_delisted = pd.isna(current_price_a) or pd.isna(current_price_b)
+            if is_delisted:
+                # Use last valid prices for exit
+                # Look backwards to find last valid price
+                last_valid_a = trading_close[sym_a].iloc[:i+1].dropna().iloc[-1] if trading_close[sym_a].iloc[:i+1].notna().any() else position["entry_price_a"]
+                last_valid_b = trading_close[sym_b].iloc[:i+1].dropna().iloc[-1] if trading_close[sym_b].iloc[:i+1].notna().any() else position["entry_price_b"]
+
+                exit_price_a = last_valid_a
+                exit_price_b = last_valid_b
+                exit_date = current_date
+                days_held = i - position_entry_idx
+
+                # Calculate P&L
+                if position["direction"] == 1:
+                    pnl_a = (exit_price_a - position["entry_price_a"]) * position["shares_a"]
+                    pnl_b = (position["entry_price_b"] - exit_price_b) * position["shares_b"]
+                else:
+                    pnl_a = (position["entry_price_a"] - exit_price_a) * position["shares_a"]
+                    pnl_b = (exit_price_b - position["entry_price_b"]) * position["shares_b"]
+
+                gross_pnl = pnl_a + pnl_b
+                exit_value = (exit_price_a * position["shares_a"] +
+                              exit_price_b * position["shares_b"])
+                exit_commission = exit_value * config.commission
+                entry_commission = position["entry_commission"]
+                total_commission = entry_commission + exit_commission
+                trade_pnl = gross_pnl - total_commission
+
+                trade = Trade(
+                    pair=pair,
+                    direction=position["direction"],
+                    entry_date=position["entry_date"],
+                    exit_date=exit_date,
+                    entry_price_a=position["entry_price_a"],
+                    entry_price_b=position["entry_price_b"],
+                    exit_price_a=exit_price_a,
+                    exit_price_b=exit_price_b,
+                    shares_a=position["shares_a"],
+                    shares_b=position["shares_b"],
+                    pnl=trade_pnl,
+                    pnl_pct=trade_pnl / config.capital_per_trade,
+                    holding_days=days_held,
+                    entry_distance=position["entry_distance"],
+                    exit_distance=current_distance if not pd.isna(current_distance) else position["entry_distance"],
+                    exit_reason="delisting",
+                    max_adverse_spread=position["max_adverse_distance"],
+                    cycle_id=cycle_id,
+                )
+                trades.append(trade)
+
+                new_equity = equity[-1] + gross_pnl - exit_commission
+                equity.append(new_equity)
+                equity_dates.append(exit_date)
+
+                position = None
+                position_entry_idx = None
+                continue
+
+        # Skip if no valid spread (and no position to close)
         if pd.isna(current_spread):
             equity.append(equity[-1])
             equity_dates.append(next_date)
@@ -194,7 +269,7 @@ def run_backtest_single_pair(
 
             # GGR exit: Check for spread crossing zero (sign change)
             if not should_exit and i > 0:
-                prev_spread = trading_spread.iloc[i - 1]
+                prev_spread = spread_arr[i - 1]
                 crossed_zero = (
                     (prev_spread > 0 and current_spread <= 0) or
                     (prev_spread < 0 and current_spread >= 0)
@@ -207,13 +282,13 @@ def run_backtest_single_pair(
                 # Exit timing depends on wait_days setting
                 if config.wait_days == 0:
                     # Same-day execution at CLOSE
-                    exit_price_a = trading_close[sym_a].iloc[i]
-                    exit_price_b = trading_close[sym_b].iloc[i]
+                    exit_price_a = close_a_arr[i]
+                    exit_price_b = close_b_arr[i]
                     exit_date = current_date
                 else:
                     # Next-day execution at OPEN (default)
-                    exit_price_a = trading_open[sym_a].iloc[i + 1]
-                    exit_price_b = trading_open[sym_b].iloc[i + 1]
+                    exit_price_a = open_a_arr[i + 1]
+                    exit_price_b = open_b_arr[i + 1]
                     exit_date = next_date
 
                 # Calculate P&L
@@ -284,16 +359,22 @@ def run_backtest_single_pair(
                 # Entry timing depends on wait_days setting
                 if config.wait_days == 0:
                     # Same-day execution at CLOSE
-                    entry_price_a = trading_close[sym_a].iloc[i]
-                    entry_price_b = trading_close[sym_b].iloc[i]
+                    entry_price_a = close_a_arr[i]
+                    entry_price_b = close_b_arr[i]
                     entry_date = current_date
                     entry_idx = i
                 else:
                     # Next-day execution at OPEN (default)
-                    entry_price_a = trading_open[sym_a].iloc[i + 1]
-                    entry_price_b = trading_open[sym_b].iloc[i + 1]
+                    entry_price_a = open_a_arr[i + 1]
+                    entry_price_b = open_b_arr[i + 1]
                     entry_date = next_date
                     entry_idx = i + 1
+
+                # Skip entry if prices are NaN (e.g., stock delisted before entry)
+                if pd.isna(entry_price_a) or pd.isna(entry_price_b):
+                    equity.append(equity[-1])
+                    equity_dates.append(next_date)
+                    continue
 
                 # Calculate shares (equal dollar allocation to each leg)
                 half_capital = config.capital_per_trade / 2
@@ -330,6 +411,18 @@ def run_backtest_single_pair(
     if position is not None:
         exit_price_a = trading_close[sym_a].iloc[-1]
         exit_price_b = trading_close[sym_b].iloc[-1]
+
+        # Handle NaN prices at end of data (stock may have delisted)
+        if pd.isna(exit_price_a) or pd.isna(exit_price_b):
+            # Find last valid prices, fallback to entry price
+            if trading_close[sym_a].notna().any():
+                exit_price_a = trading_close[sym_a].dropna().iloc[-1]
+            else:
+                exit_price_a = position["entry_price_a"]
+            if trading_close[sym_b].notna().any():
+                exit_price_b = trading_close[sym_b].dropna().iloc[-1]
+            else:
+                exit_price_b = position["entry_price_b"]
 
         if position["direction"] == 1:
             pnl_a = (exit_price_a - position["entry_price_a"]) * position["shares_a"]
@@ -417,6 +510,57 @@ def run_backtest(
         results[pair] = result
 
     return results
+
+
+def run_backtest_parallel(
+    formation_close: pd.DataFrame,
+    trading_close: pd.DataFrame,
+    trading_open: pd.DataFrame,
+    pairs: list[tuple[str, str]],
+    config: BacktestConfig | None = None,
+    cycle_id: int | None = None,
+    n_jobs: int = -1,
+) -> dict[tuple[str, str], BacktestResult]:
+    """
+    Run GGR backtest for multiple pairs in parallel using joblib.
+
+    This is a parallelized version of run_backtest() that can provide
+    2-4x speedup for large numbers of pairs.
+
+    Args:
+        formation_close: Close prices for formation period (for calculating σ)
+        trading_close: Close prices for trading period (for signals)
+        trading_open: Open prices for trading period (for execution)
+        pairs: List of pairs to backtest
+        config: Backtest configuration (optional)
+        cycle_id: Cycle identifier for staggered backtests (optional)
+        n_jobs: Number of parallel workers (-1 for all cores, 1 for sequential)
+
+    Returns:
+        Dictionary mapping pair to BacktestResult
+    """
+    if config is None:
+        config = BacktestConfig()
+
+    # For small workloads, sequential is faster (avoids serialization overhead)
+    if len(pairs) <= 2 or n_jobs == 1:
+        return run_backtest(formation_close, trading_close, trading_open, pairs, config, cycle_id)
+
+    try:
+        from joblib import Parallel, delayed
+
+        # Use threading backend since pandas/numpy operations release the GIL
+        results_list = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(run_backtest_single_pair)(
+                formation_close, trading_close, trading_open, pair, config, cycle_id
+            )
+            for pair in pairs
+        )
+
+        return {pair: result for pair, result in zip(pairs, results_list)}
+    except ImportError:
+        # Fallback to sequential if joblib not installed
+        return run_backtest(formation_close, trading_close, trading_open, pairs, config, cycle_id)
 
 
 def combine_results(

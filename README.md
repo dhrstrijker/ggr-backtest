@@ -9,7 +9,10 @@ A Python implementation of the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distanc
 - **Proper Execution Timing**: Signals at close, execution at next-day open (no lookahead bias)
 - **Interactive Dashboard**: Visualize performance, analyze pairs, and inspect trades with correct per-cycle calculations
 - **Dollar-Based Metrics**: Realized P&L tracking with fair capital allocation per GGR paper
-- **Comprehensive Test Suite**: 205 tests covering methodology edge cases
+- **Sector-Based Configuration**: CLI flags for utilities, tech, shipping, or S&P 500 universes
+- **Delisting Handling**: Graceful position closure when stocks delist mid-trade
+- **Performance Optimized**: Vectorized NumPy operations, SSD caching, and optional parallelization for 500+ stock universes
+- **Comprehensive Test Suite**: 183 tests covering methodology edge cases
 
 ## Architecture Overview
 
@@ -182,7 +185,17 @@ cp .env.example .env
 ### 2. Run the Dashboard
 
 ```bash
+# Run with default sector (utilities)
 python dashboard.py
+
+# Or choose a specific sector
+python dashboard.py --utilities     # ~34 utility stocks (default)
+python dashboard.py --tech          # ~50 technology stocks
+python dashboard.py --shipping      # ~20 shipping stocks
+python dashboard.py --us-market     # ~500 S&P 500 stocks
+
+# Custom configuration
+python dashboard.py --config path/to/config.json
 ```
 
 Then open http://localhost:8050 in your browser.
@@ -234,7 +247,7 @@ ggr-backtest/
 ├── README.md
 ├── requirements.txt
 ├── .env.example
-├── dashboard.py              # Dashboard entry point
+├── dashboard.py              # Dashboard entry point with sector CLI flags
 ├── src/
 │   ├── __init__.py
 │   ├── data.py               # Polygon.io data fetching + CSV caching
@@ -243,12 +256,18 @@ ggr-backtest/
 │   ├── backtest.py           # Single-pair backtest engine
 │   ├── staggered.py          # Staggered portfolio methodology
 │   └── analysis.py           # Performance metrics + visualization
+├── configs/
+│   └── sectors/              # All configuration lives here (no hardcoded defaults)
+│       ├── utilities.json    # ~34 utility stocks (default)
+│       ├── tech.json         # ~50 technology stocks
+│       ├── shipping.json     # ~20 shipping stocks
+│       └── us_market.json    # ~500 S&P 500 stocks
 ├── dashboard/
 │   ├── app.py                # Dash application factory
 │   ├── data_store.py         # Pre-computed backtest results
 │   ├── layouts/              # Page layouts (fund overview, pairs, inspector)
 │   └── callbacks/            # Interactive callbacks
-├── tests/                    # 205 tests covering all methodology details
+├── tests/                    # 183 tests covering all methodology details
 │   ├── test_backtest.py
 │   ├── test_staggered.py
 │   ├── test_signals.py
@@ -260,34 +279,41 @@ ggr-backtest/
 
 ## Configuration
 
-Default parameters in `dashboard/data_store.py`:
+All configuration is centralized in `configs/sectors/` as JSON files. There are no hardcoded defaults in the codebase - the dashboard always loads configuration from these files.
 
-```python
-DEFAULT_CONFIG = {
-    # Universe - shipping/energy stocks for pair formation
-    "symbols": ["DHT", "FRO", "ASC", "NAT", "TNK", "INSW", "STNG", "TRMD", "ZIM", "DAC",
-                "GSL", "CMRE", "SBLK", "GNK", "SB", "DSX", "TOPS", "SHIP", "PSHG", "FLNG",
-                "GLNG", "DLNG", "GASS", "EDRY", "GLBS", "CTRM", "PANL", "MATX", "ESEA",
-                "NMM", "SFL", "NVGS", "KNOP", "LPG"],
+### Sector CLI Flags
 
-    # Date range
-    "start_date": "2021-01-01",
-    "end_date": "2026-01-01",
+| Flag | Sector | Symbols | Description |
+|------|--------|---------|-------------|
+| `--utilities` | Utilities | ~34 | US utility companies (default) |
+| `--tech` | Technology | ~50 | Large/mid-cap tech stocks |
+| `--shipping` | Shipping | ~20 | Container, dry bulk, tanker companies |
+| `--us-market` | S&P 500 | ~500 | Broad US market coverage |
+| `--config FILE` | Custom | Variable | Load from JSON config file |
 
-    # Staggered methodology parameters
-    "formation_days": 252,        # 12 months - pair selection + σ calculation
-    "trading_days": 126,          # 6 months - active trading period
-    "overlap_days": 21,           # ~1 month between new portfolio starts
-    "n_pairs": 10,                # Top pairs per portfolio cycle
-    "min_data_pct": 0.95,         # Minimum data coverage required
+### Sector Config File Format
 
-    # Backtest parameters
-    "entry_threshold": 2.0,       # Enter when |distance| > 2.0σ
-    "max_holding_days": 126,      # Force exit after N days (fallback)
-    "capital_per_trade": 10000.0, # $ allocated per pair trade
-    "commission": 0.001,          # 0.1% commission per trade
+Sector configurations are stored in `configs/sectors/` as JSON files:
+
+```json
+{
+  "name": "Utilities",
+  "description": "US Utilities sector stocks",
+  "symbols": ["NEE", "DUK", "SO", "AEP", "..."],
+  "start_date": "2015-01-01",
+  "end_date": "2026-01-01",
+  "formation_days": 252,
+  "trading_days": 126,
+  "overlap_days": 21,
+  "n_pairs": 10,
+  "entry_threshold": 2.0,
+  "max_holding_days": 126,
+  "capital_per_trade": 10000.0,
+  "commission": 0.001
 }
 ```
+
+**Note:** Formation period filtering requires 100% data coverage (no `min_data_pct` threshold). Symbols must have traded every day during the 12-month formation period per GGR methodology.
 
 ### Staggered Portfolio Parameters
 
@@ -385,20 +411,52 @@ flowchart TD
 
 6. **Commission Model**: Flat percentage commission (0.1%) applied on entry and exit.
 
+7. **Formation-Only Filtering**: Symbols must have 100% data coverage during the formation period. No filtering based on trading period data (that would be look-ahead bias).
+
+8. **Delisting Handling**: If a stock delists during trading (NaN prices), the position is closed at the last available price with `exit_reason='delisting'`.
+
+---
+
+## Performance Optimizations
+
+The backtester is optimized for large stock universes (500+ symbols):
+
+| Optimization | Description | Impact |
+|--------------|-------------|--------|
+| **Vectorized SSD** | NumPy broadcasting for pair distance calculation | 10-100x faster |
+| **SSD Caching** | Cache formation period computations across overlapping cycles | 2-3x faster |
+| **Parallel Backtests** | Optional joblib parallelization for pair backtests | 2-4x faster |
+| **Shared Formations** | Dashboard computes SSD matrices once for both wait modes | ~50% faster |
+| **NumPy Arrays** | Pre-extracted arrays in backtest loop | 20-30% faster |
+
+**Estimated performance for US Market (500 stocks):** 2-5 minutes (vs 30-60 min unoptimized)
+
+To enable parallel backtests:
+```python
+from src.staggered import run_staggered_backtest
+
+result = run_staggered_backtest(
+    close_prices, open_prices, config,
+    parallel=True,  # Enable parallel pair backtests
+    n_jobs=-1,      # Use all CPU cores
+)
+```
+
 ---
 
 ## Testing
 
-The test suite (205 tests) validates critical methodology assumptions:
+The test suite (183 tests) validates critical methodology assumptions:
 
 ### Backtest Tests (`test_backtest.py`)
 - Trade execution at next-day open (wait_days=1) or same-day close (wait_days=0)
 - P&L calculation correctness
 - Max holding days enforcement
-- Exit reason tracking ("crossing", "max_holding", "end_of_data")
+- Exit reason tracking ("crossing", "max_holding", "end_of_data", "delisting")
 - Initial divergence handling (trades can open on day 1)
 - Maximum adverse excursion (MAE) tracking
 - Forced liquidation at period end
+- Delisting handling with NaN price safety
 
 ### Staggered Tests (`test_staggered.py`)
 - Cycle generation with correct window alignment
@@ -407,6 +465,7 @@ The test suite (205 tests) validates critical methodology assumptions:
 - Per-cycle pair selection
 - Monthly return aggregation
 - Zero interest assumption (uninvested capital earns 0%)
+- Formation-only filtering (100% coverage, no look-ahead bias)
 
 ### Signal Tests (`test_signals.py`)
 - Entry triggers when |distance| > 2σ (static from formation)
@@ -446,6 +505,8 @@ pytest tests/ -v --cov=src
 | Portfolio | Staggered overlapping (~6 active) |
 | P&L Tracking | Realized (on trade exit) |
 | Capital Basis | Committed capital across active portfolios |
+| Formation filter | 100% data coverage (no look-ahead) |
+| Delisting | Close at last available price |
 
 ---
 

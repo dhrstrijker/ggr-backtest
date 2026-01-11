@@ -1,0 +1,18 @@
+{
+  "name": "Shipping",
+  "description": "Container shipping, dry bulk, and tanker companies",
+  "symbols": [
+    "ZIM", "SBLK", "GOGL", "GNK", "EGLE", "DSX", "NMM", "CMRE", "DAC", "GSL",
+    "MATX", "KEX", "TRMD", "STNG", "NAT", "FRO", "INSW", "TNK", "ASC", "GRIN"
+  ],
+  "start_date": "2015-01-01",
+  "end_date": "2026-01-01",
+  "formation_days": 252,
+  "trading_days": 126,
+  "overlap_days": 21,
+  "n_pairs": 10,
+  "entry_threshold": 2.0,
+  "max_holding_days": 126,
+  "capital_per_trade": 10000.0,
+  "commission": 0.001
+}

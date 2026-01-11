@@ -11,6 +11,9 @@ from src.pairs import (
     normalize_prices,
     calculate_ssd,
     calculate_ssd_matrix,
+    _calculate_ssd_matrix_loop,
+    _calculate_ssd_matrix_vectorized,
+    _calculate_ssd_matrix_chunked,
     select_top_pairs,
     get_pair_stats,
 )
@@ -357,3 +360,109 @@ class TestGetPairStats:
         stats = get_pair_stats(normalized, ('A', 'B'))
 
         assert stats['spread_std'] > 0
+
+
+class TestVectorizedSSDEquivalence:
+    """Test that vectorized SSD implementations match the original loop version."""
+
+    def test_vectorized_matches_loop_small(self):
+        """Vectorized SSD should match loop-based for small dataset."""
+        np.random.seed(42)
+        prices = pd.DataFrame(
+            np.random.randn(20, 5).cumsum(axis=0) + 100,
+            columns=['A', 'B', 'C', 'D', 'E']
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_loop = _calculate_ssd_matrix_loop(normalized)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_loop.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Vectorized SSD should match loop-based implementation"
+        )
+
+    def test_vectorized_matches_loop_medium(self):
+        """Vectorized SSD should match loop-based for medium dataset."""
+        np.random.seed(123)
+        prices = pd.DataFrame(
+            np.random.randn(100, 20).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(20)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_loop = _calculate_ssd_matrix_loop(normalized)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_loop.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Vectorized SSD should match loop-based implementation"
+        )
+
+    def test_chunked_matches_vectorized(self):
+        """Chunked SSD should match full vectorized version."""
+        np.random.seed(456)
+        prices = pd.DataFrame(
+            np.random.randn(50, 15).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(15)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+        ssd_chunked = _calculate_ssd_matrix_chunked(normalized, chunk_size=5)
+
+        np.testing.assert_allclose(
+            ssd_vec.values, ssd_chunked.values, rtol=1e-10,
+            err_msg="Chunked SSD should match full vectorized version"
+        )
+
+    def test_vectorized_with_nan_values(self):
+        """Vectorized SSD should handle NaN values correctly."""
+        prices = pd.DataFrame({
+            'A': [100.0, 110.0, 120.0, 130.0, 140.0, 150.0],
+            'B': [100.0, 105.0, np.nan, 125.0, 135.0, 145.0],  # One NaN
+            'C': [100.0, 108.0, 118.0, np.nan, np.nan, 148.0],  # Two NaNs
+        })
+        normalized = normalize_prices(prices)
+
+        ssd_loop = _calculate_ssd_matrix_loop(normalized)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_loop.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Vectorized SSD should match loop-based with NaN values"
+        )
+
+    def test_vectorized_insufficient_overlap_returns_inf(self):
+        """Both implementations should return inf for pairs with <50% overlap."""
+        # Create data where B only has 4 valid values out of 10 (40% overlap)
+        # First value must be valid for normalization to work
+        prices = pd.DataFrame({
+            'A': [100.0 + i for i in range(10)],
+            'B': [100.0, np.nan, np.nan, np.nan, np.nan, np.nan, 105.0, 110.0, 115.0, np.nan],  # 40% overlap
+        })
+        normalized = normalize_prices(prices)
+
+        ssd_loop = _calculate_ssd_matrix_loop(normalized)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        # Both should return infinity for insufficient overlap (<50%)
+        assert np.isinf(ssd_loop.loc['A', 'B']), "Loop: Should return inf for <50% overlap"
+        assert np.isinf(ssd_vec.loc['A', 'B']), "Vectorized: Should return inf for <50% overlap"
+
+    def test_calculate_ssd_matrix_uses_vectorized(self):
+        """Main calculate_ssd_matrix should use vectorized by default."""
+        np.random.seed(789)
+        prices = pd.DataFrame(
+            np.random.randn(30, 8).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(8)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_default = calculate_ssd_matrix(normalized)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_default.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Default calculate_ssd_matrix should use vectorized version"
+        )

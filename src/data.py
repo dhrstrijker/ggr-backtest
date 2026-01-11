@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pandas as pd
 import requests
 from dotenv import load_dotenv
+
+
+# Rate limiting configuration
+REQUESTS_PER_SECOND = 10  # Polygon paid tier recommends staying under 100/sec
 
 
 def get_api_key() -> str:
@@ -30,6 +35,10 @@ def fetch_prices(
     """
     Fetch daily OHLC data from Polygon.io for multiple symbols.
 
+    Handles delistings and new stocks by keeping ALL trading dates (union)
+    and allowing NaN values for symbols that don't have data on certain dates.
+    The per-cycle filtering in staggered.py will handle symbol selection.
+
     Args:
         symbols: List of stock tickers (e.g., ['AAPL', 'MSFT'])
         start_date: Start date in 'YYYY-MM-DD' format
@@ -43,8 +52,14 @@ def fetch_prices(
         api_key = get_api_key()
 
     all_data = {}
+    delay = 1.0 / REQUESTS_PER_SECOND  # Delay between requests for rate limiting
+    failed_symbols = []
 
-    for symbol in symbols:
+    for i, symbol in enumerate(symbols):
+        # Progress indicator for large fetches
+        if len(symbols) > 50 and (i + 1) % 50 == 0:
+            print(f"  Fetched {i + 1}/{len(symbols)} symbols...")
+
         url = (
             f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/"
             f"{start_date}/{end_date}"
@@ -56,68 +71,85 @@ def fetch_prices(
             "apiKey": api_key,
         }
 
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = requests.get(url, params=params)
 
-        if data.get("resultsCount", 0) == 0:
-            print(f"Warning: No data returned for {symbol}")
-            continue
+            # Handle rate limiting (429 Too Many Requests)
+            if response.status_code == 429:
+                print(f"  Rate limited, waiting 60 seconds...")
+                time.sleep(60)
+                response = requests.get(url, params=params)
 
-        results = data.get("results", [])
-        if not results:
-            continue
+            response.raise_for_status()
+            data = response.json()
 
-        df = pd.DataFrame(results)
-        df["date"] = pd.to_datetime(df["t"], unit="ms")
-        df = df.set_index("date")
-        df = df.rename(columns={
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-        })
-        df = df[["open", "high", "low", "close", "volume"]]
+            if data.get("resultsCount", 0) == 0:
+                print(f"  Warning: No data returned for {symbol}")
+                failed_symbols.append(symbol)
+                continue
 
-        all_data[symbol] = df
+            results = data.get("results", [])
+            if not results:
+                failed_symbols.append(symbol)
+                continue
+
+            df = pd.DataFrame(results)
+            df["date"] = pd.to_datetime(df["t"], unit="ms")
+            df = df.set_index("date")
+            df = df.rename(columns={
+                "o": "open",
+                "h": "high",
+                "l": "low",
+                "c": "close",
+                "v": "volume",
+            })
+            df = df[["open", "high", "low", "close", "volume"]]
+
+            all_data[symbol] = df
+
+        except requests.exceptions.RequestException as e:
+            print(f"  Error fetching {symbol}: {e}")
+            failed_symbols.append(symbol)
+
+        # Rate limiting delay
+        time.sleep(delay)
 
     if not all_data:
         raise ValueError("No data fetched for any symbol")
 
+    if failed_symbols:
+        print(f"\n  Failed to fetch {len(failed_symbols)} symbols: {failed_symbols[:10]}{'...' if len(failed_symbols) > 10 else ''}")
+
     # Combine all symbols into a single DataFrame with MultiIndex columns
-    combined = pd.concat(all_data, axis=1)
+    # Using join='outer' keeps ALL dates (union) - allows NaN for missing data
+    combined = pd.concat(all_data, axis=1, join="outer")
     combined.columns = pd.MultiIndex.from_tuples(
         [(sym, col) for sym, col in combined.columns]
     )
 
-    # Check for symbols with significantly less data before alignment
+    # Sort by date
+    combined = combined.sort_index()
+
+    # Report data coverage statistics
     symbol_counts = {}
     for symbol in combined.columns.get_level_values(0).unique():
-        symbol_counts[symbol] = combined[symbol].dropna().shape[0]
+        symbol_counts[symbol] = combined[symbol]["close"].notna().sum()
 
     max_count = max(symbol_counts.values())
-    problem_symbols = {s: c for s, c in symbol_counts.items() if c < max_count * 0.9}
+    min_count = min(symbol_counts.values())
+
+    print(f"\n  Data coverage: {min_count}-{max_count} trading days per symbol")
+    print(f"  Total trading days in dataset: {len(combined)}")
+
+    # Warn about symbols with significantly less data
+    problem_symbols = {s: c for s, c in symbol_counts.items() if c < max_count * 0.5}
 
     if problem_symbols:
-        print("\n" + "=" * 60)
-        print("WARNING: Some symbols have significantly less data!")
-        print("=" * 60)
-        for sym, count in problem_symbols.items():
-            pct = count / max_count * 100
-            print(f"  {sym}: {count} rows ({pct:.1f}% of max)")
-        print(f"\nMax rows: {max_count}")
-        print("These symbols may cause data gaps after alignment.")
-        print("Consider removing them from your universe.")
-        print("=" * 60 + "\n")
-
-    # Align all symbols to the same dates (intersection)
-    rows_before = len(combined)
-    combined = combined.dropna(how="any")
-    rows_after = len(combined)
-
-    if rows_after < rows_before * 0.8:
-        print(f"WARNING: Alignment dropped {rows_before - rows_after} rows ({(1 - rows_after/rows_before)*100:.1f}%)")
+        print(f"\n  WARNING: {len(problem_symbols)} symbols have <50% data coverage")
+        if len(problem_symbols) <= 10:
+            for sym, count in sorted(problem_symbols.items(), key=lambda x: x[1]):
+                pct = count / max_count * 100
+                print(f"    {sym}: {count} days ({pct:.1f}%)")
 
     return combined
 
@@ -133,10 +165,9 @@ def get_close_prices(prices_df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with symbols as columns and close prices
     """
     symbols = prices_df.columns.get_level_values(0).unique()
-    close_prices = pd.DataFrame(index=prices_df.index)
-    for symbol in symbols:
-        close_prices[symbol] = prices_df[(symbol, "close")]
-    return close_prices
+    # Use dict comprehension + pd.concat to avoid DataFrame fragmentation
+    close_dict = {symbol: prices_df[(symbol, "close")] for symbol in symbols}
+    return pd.DataFrame(close_dict, index=prices_df.index)
 
 
 def get_open_prices(prices_df: pd.DataFrame) -> pd.DataFrame:
@@ -150,10 +181,9 @@ def get_open_prices(prices_df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with symbols as columns and open prices
     """
     symbols = prices_df.columns.get_level_values(0).unique()
-    open_prices = pd.DataFrame(index=prices_df.index)
-    for symbol in symbols:
-        open_prices[symbol] = prices_df[(symbol, "open")]
-    return open_prices
+    # Use dict comprehension + pd.DataFrame to avoid fragmentation
+    open_dict = {symbol: prices_df[(symbol, "open")] for symbol in symbols}
+    return pd.DataFrame(open_dict, index=prices_df.index)
 
 
 def cache_prices(df: pd.DataFrame, path: str | Path) -> None:

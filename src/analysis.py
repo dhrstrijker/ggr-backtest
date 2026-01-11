@@ -69,7 +69,7 @@ def calculate_metrics(
     if len(returns) > 0 and returns.std() > 0:
         # Assume ~252 trading days per year
         excess_returns = returns - risk_free_rate / 252
-        sharpe = np.sqrt(252) * excess_returns.mean() / returns.std()
+        sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
     else:
         sharpe = 0
 
@@ -1508,16 +1508,16 @@ def calculate_ggr_dollar_metrics(
         ann_return_committed = 0
 
     # Monthly P&L for Sharpe ratio calculation
+    # Use capital_fully_invested (capital in pairs that actually traded)
+    # instead of capital_committed (all allocated capital)
     monthly_pnl = calculate_monthly_pnl_series(all_trades)
     monthly_returns = (
-        monthly_pnl / capital_committed if capital_committed > 0 else monthly_pnl
+        monthly_pnl / capital_fully_invested if capital_fully_invested > 0 else monthly_pnl
     )
 
-    # Sharpe ratio (annualized)
-    monthly_rf = risk_free_rate / 12
-    excess_returns = monthly_returns - monthly_rf
-    if len(excess_returns) > 1 and excess_returns.std() > 0:
-        sharpe = np.sqrt(12) * excess_returns.mean() / excess_returns.std()
+    # Sharpe ratio (annualized) - no risk-free rate for dollar-neutral long-short
+    if len(monthly_returns) > 1 and monthly_returns.std() > 0:
+        sharpe = np.sqrt(12) * monthly_returns.mean() / monthly_returns.std()
     else:
         sharpe = 0
 
