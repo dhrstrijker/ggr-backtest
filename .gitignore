@@ -30,3 +30,4 @@ data/
 
 # Generated HTML reports
 *.html
+docs/
