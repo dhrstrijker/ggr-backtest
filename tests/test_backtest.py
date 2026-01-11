@@ -1083,16 +1083,15 @@ class TestInitialDivergence:
 class TestDelistingHandling:
     """Test suite for proper delisting/data-end handling.
 
-    NOTE: Full delisting handling (exit at last valid price with calculated P&L)
-    is not yet implemented. These tests document current behavior and expectations.
+    The backtest engine handles delisting by:
+    1. Detecting NaN prices when a position is open
+    2. Looking backwards to find the last valid price for each stock
+    3. Calculating proper P&L based on last valid prices
+    4. Creating a Trade with exit_reason="delisting"
     """
 
     def test_delisting_does_not_crash(self):
-        """When a stock stops trading (NaN), backtest should not crash.
-
-        Current limitation: Exit prices may be NaN and P&L uncalculable.
-        Future improvement: Should exit at last valid price with valid P&L.
-        """
+        """When a stock stops trading (NaN), backtest should exit at last valid price."""
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
@@ -1121,7 +1120,6 @@ class TestDelistingHandling:
             capital_per_trade=10000,
         )
 
-        # Should not crash - that's the minimum requirement
         result = run_backtest_single_pair(
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
@@ -1129,6 +1127,18 @@ class TestDelistingHandling:
         # Verify it returns a valid result structure
         assert isinstance(result.trades, list), "Should return valid trades list"
         assert len(result.equity_curve) > 0, "Should have equity curve"
+
+        # Should have trades that exit due to delisting
+        if result.trades:
+            delisting_exits = [t for t in result.trades if t.exit_reason == 'delisting']
+            assert len(delisting_exits) > 0, \
+                f"Should have delisting exit. Got exit reasons: {[t.exit_reason for t in result.trades]}"
+
+            # Verify P&L is valid (not NaN) for delisting exits
+            for trade in delisting_exits:
+                assert not np.isnan(trade.pnl), "Delisting trade P&L should not be NaN"
+                assert not np.isnan(trade.exit_price_a), "Exit price A should not be NaN"
+                assert not np.isnan(trade.exit_price_b), "Exit price B should not be NaN"
 
     def test_both_stocks_delist_gracefully(self):
         """If both stocks in a pair stop trading, should handle gracefully."""
@@ -1154,7 +1164,6 @@ class TestDelistingHandling:
             capital_per_trade=10000,
         )
 
-        # Should not crash
         result = run_backtest_single_pair(
             formation_close, trading_close, trading_open, ('A', 'B'), config
         )
@@ -1162,3 +1171,7 @@ class TestDelistingHandling:
         # Verify it returns a valid result structure
         assert isinstance(result.trades, list), "Should return valid trades list"
         assert len(result.equity_curve) > 0, "Should have equity curve"
+
+        # If trades were opened before delisting, they should exit with valid P&L
+        for trade in result.trades:
+            assert not np.isnan(trade.pnl), f"Trade P&L should not be NaN: {trade}"
