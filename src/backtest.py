@@ -134,6 +134,16 @@ def run_backtest_single_pair(
     formation_baseline_a = formation_close[sym_a].iloc[0]
     formation_baseline_b = formation_close[sym_b].iloc[0]
 
+    # Skip pairs where baseline prices are invalid (NaN, zero, or negative)
+    if (pd.isna(formation_baseline_a) or pd.isna(formation_baseline_b) or
+        formation_baseline_a <= 0 or formation_baseline_b <= 0):
+        return BacktestResult(
+            trades=[],
+            equity_curve=pd.Series([config.capital_per_trade], index=[trading_close.index[0]]),
+            config=config,
+            pair=pair,
+        )
+
     # Calculate formation period statistics (STATIC - per GGR paper)
     formation_spread = calculate_spread(
         formation_close[sym_a],

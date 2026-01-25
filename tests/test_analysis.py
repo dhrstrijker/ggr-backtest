@@ -925,3 +925,125 @@ class TestCalculateStaggeredMetrics:
         # Avg monthly return should also be positive
         assert metrics["avg_monthly_return"] > 0, \
             f"Avg monthly return should be positive, got {metrics['avg_monthly_return']}"
+
+    def test_win_rate_excludes_breakeven_in_staggered_metrics(self, trade_factory):
+        """Win rate in calculate_staggered_metrics should exclude break-even trades (Bug #2 fix)."""
+        from src.analysis import calculate_staggered_metrics
+
+        # Create trades including break-even
+        trades = [
+            trade_factory(pnl=100.0),   # Win
+            trade_factory(pnl=-50.0),   # Loss
+            trade_factory(pnl=0.0),     # Break-even
+            trade_factory(pnl=200.0),   # Win
+        ]
+
+        monthly_returns = pd.Series(
+            [0.02, 0.01, -0.01, 0.03],
+            index=pd.date_range("2021-01-31", periods=4, freq="ME"),
+        )
+        cumulative_returns = (1 + monthly_returns).cumprod() - 1
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=monthly_returns,
+            cumulative_returns=cumulative_returns,
+            all_trades=trades,
+        )
+
+        metrics = calculate_staggered_metrics(mock_result)
+
+        # Win rate = wins / (wins + losses) = 2 / (2 + 1) = 66.67%
+        # Break-even should be excluded from both numerator and denominator
+        expected_win_rate = 2 / 3  # 2 wins, 1 loss
+        assert metrics["win_rate"] == pytest.approx(expected_win_rate, rel=1e-4), \
+            f"Win rate should be {expected_win_rate:.4f} (excluding break-even), got {metrics['win_rate']}"
+
+
+# =============================================================================
+# Bug Fix Tests - Directional Win Rates (Bug #3)
+# =============================================================================
+
+
+class TestDirectionalWinRates:
+    """Tests for directional win rate calculations (Bug #3 fix)."""
+
+    def test_long_win_rate_excludes_breakeven(self, trade_factory):
+        """Long win rate should exclude break-even trades."""
+        trades = [
+            trade_factory(pnl=100.0, direction=1),   # Long win
+            trade_factory(pnl=-50.0, direction=1),   # Long loss
+            trade_factory(pnl=0.0, direction=1),     # Long break-even
+            trade_factory(pnl=200.0, direction=-1),  # Short (not counted)
+        ]
+        equity = pd.Series(
+            [10000.0, 10250.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Long win rate = 1 / (1 + 1) = 50% (1 win, 1 loss, 1 break-even excluded)
+        expected_long_win_rate = 0.5
+        assert metrics["long_win_rate"] == pytest.approx(expected_long_win_rate, rel=1e-4), \
+            f"Long win rate should be {expected_long_win_rate} (excluding break-even), got {metrics['long_win_rate']}"
+
+    def test_short_win_rate_excludes_breakeven(self, trade_factory):
+        """Short win rate should exclude break-even trades."""
+        trades = [
+            trade_factory(pnl=100.0, direction=-1),  # Short win
+            trade_factory(pnl=-50.0, direction=-1),  # Short loss
+            trade_factory(pnl=0.0, direction=-1),    # Short break-even
+            trade_factory(pnl=-100.0, direction=-1), # Short loss
+            trade_factory(pnl=200.0, direction=1),   # Long (not counted)
+        ]
+        equity = pd.Series(
+            [10000.0, 10150.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Short win rate = 1 / (1 + 2) = 33.33% (1 win, 2 losses, 1 break-even excluded)
+        expected_short_win_rate = 1 / 3
+        assert metrics["short_win_rate"] == pytest.approx(expected_short_win_rate, rel=1e-4), \
+            f"Short win rate should be {expected_short_win_rate:.4f} (excluding break-even), got {metrics['short_win_rate']}"
+
+    def test_all_breakeven_long_trades(self, trade_factory):
+        """All break-even long trades should result in 0 long win rate."""
+        trades = [
+            trade_factory(pnl=0.0, direction=1),    # Long break-even
+            trade_factory(pnl=0.0, direction=1),    # Long break-even
+            trade_factory(pnl=100.0, direction=-1), # Short (not counted)
+        ]
+        equity = pd.Series(
+            [10000.0, 10100.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Long win rate = 0 (no decided trades in long direction)
+        assert metrics["long_win_rate"] == 0, \
+            f"Long win rate should be 0 with all break-even, got {metrics['long_win_rate']}"
+
+    def test_directional_win_rates_independent(self, trade_factory):
+        """Long and short win rates should be calculated independently."""
+        trades = [
+            trade_factory(pnl=100.0, direction=1),   # Long win
+            trade_factory(pnl=50.0, direction=1),    # Long win
+            trade_factory(pnl=-100.0, direction=-1), # Short loss
+            trade_factory(pnl=-50.0, direction=-1),  # Short loss
+        ]
+        equity = pd.Series(
+            [10000.0, 10000.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Long: 2 wins, 0 losses -> 100% win rate
+        assert metrics["long_win_rate"] == 1.0, \
+            f"Long win rate should be 100% (all wins), got {metrics['long_win_rate']}"
+        # Short: 0 wins, 2 losses -> 0% win rate
+        assert metrics["short_win_rate"] == 0.0, \
+            f"Short win rate should be 0% (all losses), got {metrics['short_win_rate']}"

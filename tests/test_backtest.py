@@ -1610,3 +1610,150 @@ class TestRunBacktestParallel:
 
         assert isinstance(result, dict)
         assert len(result) == 0
+
+
+# =============================================================================
+# Bug Fix Tests - NaN Formation Baseline Validation (Bug #4)
+# =============================================================================
+
+
+class TestNaNFormationBaseline:
+    """Tests for NaN/invalid formation baseline price handling (Bug #4 fix)."""
+
+    def test_nan_baseline_price_a_returns_no_trades(self):
+        """Pair with NaN baseline price for symbol A should return empty result."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Symbol A has NaN at start (baseline)
+        formation_close = pd.DataFrame({
+            'A': [np.nan] + [100.0] * 49,  # NaN at start
+            'B': [100.0] * 50,
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 30,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(entry_threshold=2.0)
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should return empty trades since baseline is NaN
+        assert len(result.trades) == 0, \
+            f"Should have no trades with NaN baseline, got {len(result.trades)} trades"
+        assert result.equity_curve.iloc[0] == config.capital_per_trade, \
+            "Equity should start at capital with NaN baseline"
+
+    def test_nan_baseline_price_b_returns_no_trades(self):
+        """Pair with NaN baseline price for symbol B should return empty result."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Symbol B has NaN at start (baseline)
+        formation_close = pd.DataFrame({
+            'A': [100.0] * 50,
+            'B': [np.nan] + [100.0] * 49,  # NaN at start
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 30,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(entry_threshold=2.0)
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should return empty trades since baseline is NaN
+        assert len(result.trades) == 0, \
+            f"Should have no trades with NaN baseline B, got {len(result.trades)} trades"
+
+    def test_zero_baseline_price_returns_no_trades(self):
+        """Pair with zero baseline price should return empty result."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Symbol A has zero at start (baseline)
+        formation_close = pd.DataFrame({
+            'A': [0.0] + [100.0] * 49,  # Zero at start
+            'B': [100.0] * 50,
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 30,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(entry_threshold=2.0)
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should return empty trades since baseline is zero (invalid)
+        assert len(result.trades) == 0, \
+            f"Should have no trades with zero baseline, got {len(result.trades)} trades"
+
+    def test_negative_baseline_price_returns_no_trades(self):
+        """Pair with negative baseline price should return empty result."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Symbol B has negative at start (baseline)
+        formation_close = pd.DataFrame({
+            'A': [100.0] * 50,
+            'B': [-100.0] + [100.0] * 49,  # Negative at start
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 30,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(entry_threshold=2.0)
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should return empty trades since baseline is negative (invalid)
+        assert len(result.trades) == 0, \
+            f"Should have no trades with negative baseline, got {len(result.trades)} trades"
+
+    def test_valid_baseline_still_works(self):
+        """Valid baseline prices should still allow trading."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Formation prices with valid baseline and non-zero spread std
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
+        }, index=formation_dates)
+
+        # Diverging trading prices to trigger trade
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [130.0] * 10 + [100.0] * 15,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(entry_threshold=1.0)  # Lower threshold to ensure entry
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should generate trades with valid baseline
+        assert len(result.trades) > 0, \
+            "Should have trades with valid baseline prices"

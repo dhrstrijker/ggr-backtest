@@ -12,6 +12,21 @@ from plotly.subplots import make_subplots
 from .backtest import Trade
 
 
+def _directional_win_rate(trades: list) -> float:
+    """Calculate win rate for a list of trades, excluding break-even trades.
+
+    Args:
+        trades: List of Trade objects
+
+    Returns:
+        Win rate as float (0-1), or 0 if no decided trades
+    """
+    wins = len([t for t in trades if t.pnl > 0])
+    losses = len([t for t in trades if t.pnl < 0])
+    decided = wins + losses
+    return wins / decided if decided > 0 else 0
+
+
 def calculate_metrics(
     trades: list[Trade],
     equity_curve: pd.Series,
@@ -107,8 +122,8 @@ def calculate_metrics(
         "avg_holding_days": avg_holding_days,
         "long_trades": len(long_trades),
         "short_trades": len(short_trades),
-        "long_win_rate": len([t for t in long_trades if t.pnl > 0]) / len(long_trades) if long_trades else 0,
-        "short_win_rate": len([t for t in short_trades if t.pnl > 0]) / len(short_trades) if short_trades else 0,
+        "long_win_rate": _directional_win_rate(long_trades),
+        "short_win_rate": _directional_win_rate(short_trades),
     }
 
 
@@ -365,7 +380,10 @@ def plot_pair_analysis(
     # Calculate summary stats
     total_trades = len(trades)
     total_pnl = sum(t.pnl for t in trades)
-    win_rate = len([t for t in trades if t.pnl > 0]) / total_trades if total_trades > 0 else 0
+    wins = [t for t in trades if t.pnl > 0]
+    losses = [t for t in trades if t.pnl < 0]
+    decided_trades = len(wins) + len(losses)
+    win_rate = len(wins) / decided_trades if decided_trades > 0 else 0
 
     fig.update_layout(
         title=f"{sym_a}/{sym_b} Pair Analysis | Trades: {total_trades} | P&L: ${total_pnl:,.2f} | Win Rate: {win_rate:.1%}",
@@ -1215,10 +1233,12 @@ def calculate_staggered_metrics(
     # Total trades
     total_trades = len(result.all_trades) if result.all_trades else 0
 
-    # Win rate across all trades
+    # Win rate across all trades (excluding break-even trades)
     if result.all_trades:
         wins = [t for t in result.all_trades if t.pnl > 0]
-        win_rate = len(wins) / total_trades if total_trades > 0 else 0
+        losses = [t for t in result.all_trades if t.pnl < 0]
+        decided_trades = len(wins) + len(losses)
+        win_rate = len(wins) / decided_trades if decided_trades > 0 else 0
     else:
         win_rate = 0
 
