@@ -39,9 +39,18 @@ class TestGetClosePrices:
 
         close_prices = get_close_prices(prices_df)
 
-        assert isinstance(close_prices, pd.DataFrame)
-        assert "AAPL" in close_prices.columns
-        assert "MSFT" in close_prices.columns
+        # Check type and structure
+        assert isinstance(close_prices, pd.DataFrame), "Should return DataFrame"
+        assert "AAPL" in close_prices.columns, "Should contain AAPL"
+        assert "MSFT" in close_prices.columns, "Should contain MSFT"
+
+        # Verify at least one value to ensure correct extraction (not open/high/low)
+        # AAPL close starts at 151.0, not 150.0 (open) or 152.0 (high) or 148.0 (low)
+        assert close_prices["AAPL"].iloc[0] == 151.0, \
+            f"First AAPL close should be 151.0, got {close_prices['AAPL'].iloc[0]}"
+
+        # Verify correct number of rows
+        assert len(close_prices) == 10, "Should have 10 rows"
 
     def test_close_prices_correct_values(self):
         """Extracted close prices should match original values."""

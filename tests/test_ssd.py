@@ -100,9 +100,9 @@ class TestSSDCalculation:
     def test_ssd_manual_calculation(self):
         """Verify SSD matches manual calculation with sufficient data points.
 
-        Using 10 data points for more robust verification.
+        Using 10 data points for robust verification with HARDCODED expected value.
         """
-        # A: linear growth 100 -> 200
+        # A: linear growth 100 -> 200 (10% increments)
         # B: stays flat at 100
         prices = pd.DataFrame({
             'A': [100.0 + i * 10 for i in range(11)],  # 100, 110, ..., 200
@@ -111,19 +111,20 @@ class TestSSDCalculation:
         normalized = normalize_prices(prices)
         ssd_matrix = calculate_ssd_matrix(normalized)
 
-        # Normalized A: [1.0, 1.1, 1.2, ..., 2.0]
-        # Normalized B: [1.0, 1.0, 1.0, ..., 1.0]
-        # Diff: [0, 0.1, 0.2, ..., 1.0]
-        # Squared: [0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]
-        # Sum = 0.01 + 0.04 + 0.09 + 0.16 + 0.25 + 0.36 + 0.49 + 0.64 + 0.81 + 1.0 = 3.85
-        expected_ssd = sum((i * 0.1) ** 2 for i in range(11))
+        # Pre-calculated expected SSD (hardcoded for test stability):
+        # Normalized A: [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+        # Normalized B: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        # Diff:         [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        # Squared:      [0.00, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.00]
+        # Sum = 0.00 + 0.01 + 0.04 + 0.09 + 0.16 + 0.25 + 0.36 + 0.49 + 0.64 + 0.81 + 1.00 = 3.85
+        HARDCODED_EXPECTED_SSD = 3.85  # Pre-calculated, not computed in test
 
         actual_ssd = ssd_matrix.loc['A', 'B']
-        assert abs(actual_ssd - expected_ssd) < 0.001, \
-            f"Expected SSD={expected_ssd:.4f}, got {actual_ssd:.4f}"
+        assert abs(actual_ssd - HARDCODED_EXPECTED_SSD) < 0.001, \
+            f"Expected SSD={HARDCODED_EXPECTED_SSD:.4f}, got {actual_ssd:.4f}"
 
         # Also verify it's substantial (catches bugs that always return 0)
-        assert expected_ssd > 3.0, f"Expected SSD should be ~3.85, got {expected_ssd}"
+        assert actual_ssd > 3.0, f"SSD should be substantial (~3.85), got {actual_ssd}"
 
     def test_ssd_calculation_accuracy_detailed(self):
         """Verify SSD calculation with detailed manual verification.
@@ -318,15 +319,24 @@ class TestGetPairStats:
         assert abs(stats['ssd'] - ssd_matrix.loc['A', 'B']) < 0.0001
 
     def test_correlation_between_minus_one_and_one(self):
-        """Correlation should be between -1 and 1."""
+        """Correlation should be between -1 and 1, and reflect actual relationship.
+
+        Verifies both bounds AND that negatively correlated pairs show negative correlation.
+        """
         prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0, 130.0],
-            'B': [100.0, 90.0, 80.0, 70.0],  # Negatively correlated
+            'A': [100.0, 110.0, 120.0, 130.0],  # Increasing
+            'B': [100.0, 90.0, 80.0, 70.0],     # Decreasing (negatively correlated)
         })
         normalized = normalize_prices(prices)
         stats = get_pair_stats(normalized, ('A', 'B'))
 
-        assert -1.0 <= stats['correlation'] <= 1.0
+        # Verify bounds
+        assert -1.0 <= stats['correlation'] <= 1.0, \
+            f"Correlation must be in [-1, 1], got {stats['correlation']}"
+
+        # Verify actual value: perfectly inverse linear should be -1.0
+        assert stats['correlation'] < -0.9, \
+            f"Inverse linear prices should have correlation near -1, got {stats['correlation']}"
 
     def test_highly_correlated_pair(self):
         """Highly similar prices should have high correlation."""
@@ -351,15 +361,28 @@ class TestGetPairStats:
         assert abs(stats['spread_mean']) < 0.001
 
     def test_spread_std_positive(self):
-        """Spread std should be positive for non-identical series."""
+        """Spread std should be positive for non-identical series and reflect spread variance.
+
+        Verifies both that std > 0 AND that it's in a reasonable range for the test data.
+        """
         prices = pd.DataFrame({
-            'A': [100.0, 110.0, 120.0, 130.0],
-            'B': [100.0, 108.0, 122.0, 128.0],  # Slightly different
+            'A': [100.0, 110.0, 120.0, 130.0],  # +10% each step
+            'B': [100.0, 108.0, 122.0, 128.0],  # Slightly different (+8%, +22%, +28%)
         })
         normalized = normalize_prices(prices)
         stats = get_pair_stats(normalized, ('A', 'B'))
 
-        assert stats['spread_std'] > 0
+        # Basic positivity check
+        assert stats['spread_std'] > 0, "Spread std should be positive for different series"
+
+        # Spread (A - B normalized) varies from:
+        # Day 0: 1.0 - 1.0 = 0.0
+        # Day 1: 1.1 - 1.08 = 0.02
+        # Day 2: 1.2 - 1.22 = -0.02
+        # Day 3: 1.3 - 1.28 = 0.02
+        # std of [0, 0.02, -0.02, 0.02] ≈ 0.018
+        assert 0.01 < stats['spread_std'] < 0.05, \
+            f"Spread std should be ~0.018 for this data, got {stats['spread_std']}"
 
 
 class TestVectorizedSSDEquivalence:

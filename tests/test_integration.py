@@ -341,3 +341,252 @@ class TestCombineResultsIntegration:
 
         # Combined equity should reflect both
         assert combined_equity.iloc[0] == 20000.0
+
+
+# =============================================================================
+# Full Pipeline Integration Tests
+# =============================================================================
+
+
+class TestFullPipeline:
+    """Tests for complete data → normalize → SSD → pairs → backtest → metrics pipeline."""
+
+    def test_end_to_end_with_synthetic_data(self):
+        """Test: data → normalize → SSD → pairs → backtest → metrics."""
+        from src.pairs import normalize_prices, calculate_ssd_matrix, select_top_pairs
+        from src.backtest import run_backtest
+        from src.analysis import calculate_metrics
+
+        # Create synthetic data (simulating fetched data)
+        np.random.seed(42)
+        dates = pd.bdate_range(start="2020-01-01", periods=400, freq="B")
+        symbols = ["A", "B", "C", "D", "E", "F"]
+
+        # Generate correlated price data
+        close_data = {}
+        open_data = {}
+        for i, sym in enumerate(symbols):
+            base_price = 100 + i * 10
+            # A and B are highly correlated (good pair)
+            # Others have different patterns
+            if sym in ["A", "B"]:
+                returns = np.random.normal(0.0003, 0.01, len(dates))
+            else:
+                returns = np.random.normal(0.0003, 0.02, len(dates))
+            prices = base_price * np.exp(np.cumsum(returns))
+            close_data[sym] = prices
+            open_data[sym] = prices * (1 + np.random.normal(0, 0.001, len(dates)))
+
+        close_prices = pd.DataFrame(close_data, index=dates)
+        open_prices = pd.DataFrame(open_data, index=dates)
+
+        # Step 1: Split into formation and trading periods
+        formation_days = 252
+        trading_days = 126
+        formation_close = close_prices.iloc[:formation_days]
+        trading_close = close_prices.iloc[formation_days:formation_days + trading_days]
+        trading_open = open_prices.iloc[formation_days:formation_days + trading_days]
+
+        # Step 2: Normalize prices
+        normalized = normalize_prices(formation_close)
+        assert not normalized.empty, "Normalization should produce data"
+
+        # Step 3: Calculate SSD matrix
+        ssd_matrix = calculate_ssd_matrix(normalized)
+        assert ssd_matrix.shape[0] == ssd_matrix.shape[1], "SSD matrix should be square"
+
+        # Step 4: Select top pairs
+        pairs = select_top_pairs(ssd_matrix, n=3)
+        assert len(pairs) == 3, "Should select 3 pairs"
+
+        # Step 5: Run backtest
+        config = BacktestConfig(
+            entry_threshold=2.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        results = run_backtest(
+            formation_close=formation_close,
+            trading_close=trading_close,
+            trading_open=trading_open,
+            pairs=pairs,
+            config=config,
+        )
+
+        assert len(results) == 3, "Should have results for 3 pairs"
+
+        # Step 6: Calculate metrics for each pair
+        for pair, result in results.items():
+            metrics = calculate_metrics(result.trades, result.equity_curve)
+
+            # Verify metrics structure
+            assert "total_trades" in metrics
+            assert "sharpe_ratio" in metrics
+            assert "max_drawdown" in metrics
+
+            # Metrics should be valid (not NaN)
+            assert isinstance(metrics["total_trades"], int)
+            assert not np.isnan(metrics["sharpe_ratio"])
+
+    def test_staggered_multiple_cycles_complete(self):
+        """Test: full staggered backtest with 3+ cycles."""
+        from src.staggered import run_staggered_backtest, StaggeredConfig
+        from src.analysis import calculate_staggered_metrics
+
+        # Create sufficient data for multiple cycles
+        np.random.seed(123)
+        dates = pd.bdate_range(start="2019-01-01", periods=600, freq="B")
+        symbols = ["A", "B", "C", "D", "E", "F"]
+
+        close_data = {}
+        open_data = {}
+        for i, sym in enumerate(symbols):
+            base_price = 100 + i * 10
+            returns = np.random.normal(0.0003, 0.015, len(dates))
+            prices = base_price * np.exp(np.cumsum(returns))
+            close_data[sym] = prices
+            open_data[sym] = prices * (1 + np.random.normal(0, 0.001, len(dates)))
+
+        close_prices = pd.DataFrame(close_data, index=dates)
+        open_prices = pd.DataFrame(open_data, index=dates)
+
+        # Configure for multiple cycles
+        config = StaggeredConfig(
+            formation_days=150,  # Shorter for faster test
+            trading_days=75,
+            overlap_days=30,  # ~2.5 portfolios at steady state
+            n_pairs=3,
+            backtest_config=BacktestConfig(
+                entry_threshold=2.0,
+                capital_per_trade=10000,
+            ),
+        )
+
+        # Run staggered backtest
+        result = run_staggered_backtest(close_prices, open_prices, config)
+
+        # Should have multiple cycles
+        assert result.total_portfolios >= 3, \
+            f"Should have at least 3 portfolio cycles, got {result.total_portfolios}"
+
+        # Should have monthly returns
+        assert len(result.monthly_returns) > 0, "Should have monthly returns"
+
+        # Should have cumulative returns
+        assert len(result.cumulative_returns) > 0, "Should have cumulative returns"
+
+        # Calculate metrics
+        metrics = calculate_staggered_metrics(result)
+
+        # Metrics should be valid
+        assert metrics["total_months"] > 0, "Should have some months of data"
+
+    def test_error_propagation_nan_in_data(self):
+        """Test: NaN in input data handled correctly through pipeline."""
+        from src.pairs import normalize_prices, calculate_ssd_matrix, select_top_pairs
+        from src.backtest import run_backtest
+
+        # Create data with NaN values
+        np.random.seed(456)
+        dates = pd.bdate_range(start="2020-01-01", periods=400, freq="B")
+
+        # Symbol C has NaN in first row (should be filtered by normalize_prices)
+        close_data = {
+            "A": np.random.randn(400).cumsum() + 100,
+            "B": np.random.randn(400).cumsum() + 100,
+            "C": [np.nan] + list(np.random.randn(399).cumsum() + 100),  # First value NaN
+            "D": np.random.randn(400).cumsum() + 100,
+        }
+        close_prices = pd.DataFrame(close_data, index=dates)
+        open_prices = close_prices.copy()
+
+        # Formation and trading split
+        formation_close = close_prices.iloc[:250]
+        trading_close = close_prices.iloc[250:350]
+        trading_open = open_prices.iloc[250:350]
+
+        # Normalize should drop symbol C
+        normalized = normalize_prices(formation_close)
+        assert "C" not in normalized.columns, "Symbol C should be filtered out (first row NaN)"
+        assert "A" in normalized.columns, "Valid symbols should remain"
+
+        # SSD should work with remaining symbols
+        ssd_matrix = calculate_ssd_matrix(normalized)
+        assert not ssd_matrix.empty, "SSD matrix should be computed"
+
+        # Select pairs (from filtered symbols)
+        pairs = select_top_pairs(ssd_matrix, n=2)
+        assert len(pairs) > 0, "Should have at least one pair"
+
+        # Verify no pair contains filtered symbol
+        for pair in pairs:
+            assert "C" not in pair, f"Filtered symbol C should not be in pairs: {pair}"
+
+        # Run backtest with filtered pairs
+        config = BacktestConfig(entry_threshold=2.0)
+
+        results = run_backtest(
+            formation_close=formation_close,
+            trading_close=trading_close,
+            trading_open=trading_open,
+            pairs=pairs,
+            config=config,
+        )
+
+        # Should complete without error
+        assert len(results) == len(pairs)
+
+        # All results should have valid (non-NaN) equity curves
+        for pair, result in results.items():
+            assert not result.equity_curve.isna().any(), \
+                f"Equity curve for {pair} should not contain NaN"
+
+
+# =============================================================================
+# Data Quality Integration Tests
+# =============================================================================
+
+
+class TestDataQualityIntegration:
+    """Integration tests for data quality handling."""
+
+    def test_different_listing_dates_handled(self):
+        """Test: symbols with different listing dates are handled correctly."""
+        from src.pairs import normalize_prices, calculate_ssd_matrix
+        from src.staggered import filter_valid_symbols
+
+        # Create data where C starts later (listed later)
+        dates = pd.bdate_range(start="2020-01-01", periods=300, freq="B")
+
+        close_data = {
+            "A": np.random.randn(300).cumsum() + 100,
+            "B": np.random.randn(300).cumsum() + 100,
+            "C": [np.nan] * 100 + list(np.random.randn(200).cumsum() + 100),  # Starts at day 100
+            "D": np.random.randn(300).cumsum() + 100,
+        }
+        close_prices = pd.DataFrame(close_data, index=dates)
+
+        # Formation period: days 0-149 (C has only 50 valid days)
+        formation_start = dates[0]
+        formation_end = dates[149]
+
+        # Filter valid symbols for formation (100% coverage required)
+        valid_symbols = filter_valid_symbols(close_prices, formation_start, formation_end)
+
+        # C should NOT be valid (only 50/150 = 33% coverage during formation)
+        assert "C" not in valid_symbols, \
+            "Symbol C should not be valid (only 33% coverage during formation)"
+        assert "A" in valid_symbols, "Symbol A should be valid"
+        assert "B" in valid_symbols, "Symbol B should be valid"
+        assert "D" in valid_symbols, "Symbol D should be valid"
+
+        # Later formation period where C is valid: days 100-249
+        formation_start_late = dates[100]
+        formation_end_late = dates[249]
+
+        valid_symbols_late = filter_valid_symbols(close_prices, formation_start_late, formation_end_late)
+
+        # Now C should be valid (100% coverage during this formation)
+        assert "C" in valid_symbols_late, \
+            "Symbol C should be valid when formation period is after listing date"

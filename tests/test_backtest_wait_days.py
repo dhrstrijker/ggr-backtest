@@ -128,9 +128,19 @@ class TestWaitDaysParameter:
         # Entry prices should be different (open vs close)
         # wait_days=1 uses next-day OPEN
         # wait_days=0 uses same-day CLOSE
-        assert trade_1.entry_price_a != trade_0.entry_price_a or \
-               trade_1.entry_price_b != trade_0.entry_price_b, \
-               "Entry prices should differ between wait modes"
+        # At least one stock's entry price must differ (both would be even stronger)
+        price_a_differs = trade_1.entry_price_a != trade_0.entry_price_a
+        price_b_differs = trade_1.entry_price_b != trade_0.entry_price_b
+
+        assert price_a_differs or price_b_differs, \
+            f"Entry prices should differ between wait modes. " \
+            f"wait_days=0: A={trade_0.entry_price_a}, B={trade_0.entry_price_b}. " \
+            f"wait_days=1: A={trade_1.entry_price_a}, B={trade_1.entry_price_b}"
+
+        # Additionally verify entry dates differ (this is the primary behavioral difference)
+        assert trade_1.entry_date != trade_0.entry_date, \
+            f"Entry dates should differ: wait_days=0 on {trade_0.entry_date}, " \
+            f"wait_days=1 on {trade_1.entry_date}"
 
     def test_wait_days_affects_entry_date(self):
         """Entry date should differ by one day between wait_days=0 and wait_days=1."""

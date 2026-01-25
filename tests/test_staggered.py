@@ -1005,3 +1005,225 @@ class TestZeroInterestAssumption:
             unique_values = post_trade_equity.unique()
             assert len(unique_values) == 1, \
                 f"Equity should be flat after trades, got {len(unique_values)} unique values: {unique_values}"
+
+
+# =============================================================================
+# Test precompute_formations
+# =============================================================================
+
+
+class TestPrecomputeFormations:
+    """Tests for precompute_formations function.
+
+    This function computes SSD matrices and selects pairs for all cycles,
+    but does NOT run the backtest. This allows reusing formation computations
+    for multiple wait_days configurations.
+    """
+
+    def test_returns_correct_cycle_count(self, short_sample_prices):
+        """precompute_formations should return all cycles."""
+        from src.staggered import precompute_formations
+
+        close_prices, _ = short_sample_prices
+
+        config = StaggeredConfig(
+            formation_days=252,
+            trading_days=126,
+            overlap_days=42,
+            n_pairs=3,
+        )
+
+        precomputed = precompute_formations(close_prices, config)
+
+        # Should have same cycle count as generate_portfolio_cycles
+        expected_cycles = generate_portfolio_cycles(close_prices.index, config)
+        assert len(precomputed.cycles) == len(expected_cycles), \
+            f"Expected {len(expected_cycles)} cycles, got {len(precomputed.cycles)}"
+
+    def test_pairs_populated_for_each_cycle(self, short_sample_prices):
+        """Each cycle should have pairs selected (if enough symbols)."""
+        from src.staggered import precompute_formations
+
+        close_prices, _ = short_sample_prices
+
+        config = StaggeredConfig(
+            formation_days=252,
+            trading_days=126,
+            overlap_days=42,
+            n_pairs=3,
+        )
+
+        precomputed = precompute_formations(close_prices, config)
+
+        # At least some cycles should have pairs
+        cycles_with_pairs = [c for c in precomputed.cycles if c.pairs and len(c.pairs) > 0]
+        assert len(cycles_with_pairs) > 0, "At least some cycles should have pairs selected"
+
+        # Each cycle with pairs should have <= n_pairs
+        for cycle in cycles_with_pairs:
+            assert len(cycle.pairs) <= config.n_pairs, \
+                f"Cycle {cycle.cycle_id} has {len(cycle.pairs)} pairs, should be <= {config.n_pairs}"
+
+    def test_no_backtest_results_yet(self, short_sample_prices):
+        """precompute_formations should NOT run backtests (results should be None)."""
+        from src.staggered import precompute_formations
+
+        close_prices, _ = short_sample_prices
+
+        config = StaggeredConfig(
+            formation_days=252,
+            trading_days=126,
+            overlap_days=42,
+            n_pairs=3,
+        )
+
+        precomputed = precompute_formations(close_prices, config)
+
+        # No cycle should have results yet
+        for cycle in precomputed.cycles:
+            assert cycle.results is None, \
+                f"Cycle {cycle.cycle_id} should not have results yet (precompute only)"
+
+
+# =============================================================================
+# Test run_backtest_only
+# =============================================================================
+
+
+class TestRunBacktestOnly:
+    """Tests for run_backtest_only function.
+
+    This function runs backtests using precomputed formations,
+    allowing different wait_days without recomputing SSD matrices.
+    """
+
+    def test_uses_precomputed_pairs(self, short_sample_prices):
+        """run_backtest_only should use pairs from precomputed formations."""
+        from src.staggered import precompute_formations, run_backtest_only
+
+        close_prices, open_prices = short_sample_prices
+
+        config = StaggeredConfig(
+            formation_days=252,
+            trading_days=126,
+            overlap_days=42,
+            n_pairs=3,
+        )
+
+        # Precompute formations
+        precomputed = precompute_formations(close_prices, config)
+
+        # Run backtest
+        backtest_config = BacktestConfig(wait_days=1)
+        result = run_backtest_only(precomputed, close_prices, open_prices, backtest_config)
+
+        # Should have same cycle count
+        assert len(result.cycles) == len(precomputed.cycles)
+
+        # Pairs should match precomputed
+        for i, (result_cycle, precomputed_cycle) in enumerate(zip(result.cycles, precomputed.cycles)):
+            assert result_cycle.pairs == precomputed_cycle.pairs, \
+                f"Cycle {i}: pairs don't match precomputed"
+
+    def test_different_wait_days_same_formations(self, short_sample_prices):
+        """Different wait_days should use same formations but get different results."""
+        from src.staggered import precompute_formations, run_backtest_only
+
+        close_prices, open_prices = short_sample_prices
+
+        config = StaggeredConfig(
+            formation_days=252,
+            trading_days=126,
+            overlap_days=42,
+            n_pairs=3,
+        )
+
+        # Precompute formations once
+        precomputed = precompute_formations(close_prices, config)
+
+        # Run with wait_days=0
+        config_wait_0 = BacktestConfig(wait_days=0)
+        result_wait_0 = run_backtest_only(precomputed, close_prices, open_prices, config_wait_0)
+
+        # Run with wait_days=1
+        config_wait_1 = BacktestConfig(wait_days=1)
+        result_wait_1 = run_backtest_only(precomputed, close_prices, open_prices, config_wait_1)
+
+        # Both should have same cycle count
+        assert len(result_wait_0.cycles) == len(result_wait_1.cycles)
+
+        # Same pairs should be used (formations are same)
+        for c0, c1 in zip(result_wait_0.cycles, result_wait_1.cycles):
+            assert c0.pairs == c1.pairs, "Same formations should select same pairs"
+
+        # Results should exist for both
+        assert result_wait_0.all_trades is not None
+        assert result_wait_1.all_trades is not None
+
+
+# =============================================================================
+# Additional aggregate_monthly_returns Tests
+# =============================================================================
+
+
+class TestAggregateMonthlyReturnsAdvanced:
+    """Additional tests for aggregate_monthly_returns edge cases."""
+
+    def test_handles_cycles_with_no_returns(self):
+        """Should handle cycles that have no monthly returns."""
+        # Create cycle with empty returns
+        cycle_empty = PortfolioCycle(
+            cycle_id=0,
+            formation_start=pd.Timestamp("2020-01-01"),
+            formation_end=pd.Timestamp("2020-12-31"),
+            trading_start=pd.Timestamp("2021-01-01"),
+            trading_end=pd.Timestamp("2021-06-30"),
+        )
+        cycle_empty.monthly_returns = pd.Series(dtype=float)  # Empty
+
+        cycle_with_returns = PortfolioCycle(
+            cycle_id=1,
+            formation_start=pd.Timestamp("2020-02-01"),
+            formation_end=pd.Timestamp("2021-01-31"),
+            trading_start=pd.Timestamp("2021-02-01"),
+            trading_end=pd.Timestamp("2021-07-31"),
+        )
+        cycle_with_returns.monthly_returns = pd.Series(
+            [0.05, 0.10],
+            index=pd.date_range("2021-02-28", periods=2, freq="ME"),
+        )
+
+        cycles = [cycle_empty, cycle_with_returns]
+        avg_returns, active_counts = aggregate_monthly_returns(cycles)
+
+        # Should have returns from the non-empty cycle
+        assert len(avg_returns) > 0, "Should have aggregated returns from non-empty cycle"
+
+    def test_handles_single_cycle(self):
+        """Should handle single cycle correctly."""
+        cycle = PortfolioCycle(
+            cycle_id=0,
+            formation_start=pd.Timestamp("2020-01-01"),
+            formation_end=pd.Timestamp("2020-12-31"),
+            trading_start=pd.Timestamp("2021-01-01"),
+            trading_end=pd.Timestamp("2021-06-30"),
+        )
+        cycle.monthly_returns = pd.Series(
+            [0.05, 0.10, 0.03],
+            index=pd.date_range("2021-01-31", periods=3, freq="ME"),
+        )
+
+        cycles = [cycle]
+        avg_returns, active_counts = aggregate_monthly_returns(cycles)
+
+        # With single cycle, averaged returns should equal original returns
+        for month in cycle.monthly_returns.index:
+            if month in avg_returns.index:
+                assert abs(avg_returns.loc[month] - cycle.monthly_returns.loc[month]) < 0.001, \
+                    f"Single cycle return should pass through unchanged for {month}"
+
+        # All active counts should be 1
+        for month in avg_returns.index:
+            if pd.notna(avg_returns.loc[month]):
+                assert active_counts.loc[month] == 1, \
+                    f"Active count should be 1 for single cycle at {month}"

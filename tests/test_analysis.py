@@ -275,7 +275,11 @@ class TestCalculateMetrics:
             f"Profit factor with all winners should be infinity, got {metrics['profit_factor']}"
 
     def test_sharpe_ratio_handles_zero_volatility(self):
-        """Sharpe ratio with zero return volatility should handle gracefully."""
+        """Sharpe ratio with zero return volatility should return 0.
+
+        When returns have zero standard deviation (flat equity), Sharpe ratio
+        is undefined (division by zero). The implementation returns 0 in this case.
+        """
         # Flat equity curve (zero volatility in returns)
         dates = pd.date_range("2024-01-01", periods=10)
         equity = pd.Series([10000.0] * 10, index=dates)
@@ -283,9 +287,9 @@ class TestCalculateMetrics:
 
         metrics = calculate_metrics(trades, equity)
 
-        # Should return 0 or NaN, not raise an exception
-        assert metrics["sharpe_ratio"] == 0 or np.isnan(metrics["sharpe_ratio"]), \
-            f"Sharpe ratio with zero volatility should be 0 or NaN, got {metrics['sharpe_ratio']}"
+        # Implementation returns 0 when std == 0 (see analysis.py line 79)
+        assert metrics["sharpe_ratio"] == 0, \
+            f"Sharpe ratio with zero volatility should be 0, got {metrics['sharpe_ratio']}"
 
     def test_avg_loss_with_no_losses(self):
         """Average loss with no losses should be 0."""
@@ -352,10 +356,15 @@ class TestTradesToDataframe:
             "pair", "direction", "entry_date", "exit_date",
             "entry_price_a", "entry_price_b", "exit_price_a", "exit_price_b",
             "pnl", "pnl_pct", "holding_days", "entry_distance",
-            "exit_distance", "exit_reason",
+            "exit_distance", "exit_reason", "max_adverse_spread",
         ]
         for col in expected_columns:
             assert col in df.columns, f"Missing column: {col}"
+
+        # Verify at least some values are populated correctly (not just column existence)
+        assert df.iloc[0]["pnl"] == 100.0, "P&L value should match trade"
+        assert df.iloc[0]["entry_price_a"] == 100.0, "Entry price A should match trade"
+        assert df.iloc[0]["exit_reason"] == "crossing", "Exit reason should match trade"
 
     def test_dataframe_values_match_trade(self):
         """DataFrame values should match original Trade object."""
@@ -784,3 +793,152 @@ class TestProfitFactorEdgeCases:
         # Profit factor = 100 / 50 = 2.0 (ratio)
         assert metrics["profit_factor"] == 2.0, \
             f"Profit factor should be 2.0 (100/50 ratio), got {metrics['profit_factor']}"
+
+
+# =============================================================================
+# Tests for calculate_staggered_metrics
+# =============================================================================
+
+
+class MockStaggeredResultForMetrics:
+    """Mock StaggeredResult for testing calculate_staggered_metrics."""
+
+    def __init__(
+        self,
+        monthly_returns: pd.Series,
+        cumulative_returns: pd.Series,
+        all_trades: list[Trade] = None,
+        active_portfolios: pd.Series = None,
+        total_cycles: int = 10,
+    ):
+        self.monthly_returns = monthly_returns
+        self.cumulative_returns = cumulative_returns
+        self.all_trades = all_trades or []
+        self.active_portfolios_over_time = active_portfolios or pd.Series([5] * len(monthly_returns))
+        self.cycles = [None] * total_cycles  # Dummy cycles for total_portfolios property
+
+    @property
+    def total_portfolios(self) -> int:
+        return len(self.cycles)
+
+
+class TestCalculateStaggeredMetrics:
+    """Tests for calculate_staggered_metrics function."""
+
+    def test_returns_expected_structure(self):
+        """calculate_staggered_metrics should return dict with expected keys."""
+        from src.analysis import calculate_staggered_metrics
+
+        # Create mock staggered result with data
+        monthly_returns = pd.Series(
+            [0.02, 0.01, -0.01, 0.03, 0.02],
+            index=pd.date_range("2021-01-31", periods=5, freq="ME"),
+        )
+        cumulative_returns = (1 + monthly_returns).cumprod() - 1
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=monthly_returns,
+            cumulative_returns=cumulative_returns,
+        )
+
+        metrics = calculate_staggered_metrics(mock_result)
+
+        # Should have expected keys (based on actual implementation)
+        expected_keys = [
+            "total_months", "annualized_return", "sharpe_ratio",
+            "max_drawdown", "total_portfolios", "total_trades",
+        ]
+        for key in expected_keys:
+            assert key in metrics, f"Missing key: {key}"
+
+    def test_handles_empty_result(self):
+        """Should handle result with no monthly returns."""
+        from src.analysis import calculate_staggered_metrics
+
+        empty_returns = pd.Series([], dtype=float)
+        empty_cumulative = pd.Series([], dtype=float)
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=empty_returns,
+            cumulative_returns=empty_cumulative,
+        )
+
+        metrics = calculate_staggered_metrics(mock_result)
+
+        # Should return metrics with zeros
+        assert metrics["total_months"] == 0
+        assert metrics["annualized_return"] == 0
+        assert metrics["sharpe_ratio"] == 0
+
+    def test_sharpe_ratio_calculation(self):
+        """Sharpe ratio should be calculated correctly from monthly returns."""
+        from src.analysis import calculate_staggered_metrics
+
+        # Create returns with known values
+        monthly_returns = pd.Series(
+            [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
+            index=pd.date_range("2021-01-31", periods=12, freq="ME"),
+        )
+        cumulative_returns = (1 + monthly_returns).cumprod() - 1
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=monthly_returns,
+            cumulative_returns=cumulative_returns,
+        )
+
+        # With 2% annual risk-free rate = 0.167% monthly
+        metrics = calculate_staggered_metrics(mock_result, risk_free_rate=0.02)
+
+        # Sharpe ratio should be positive for consistent positive returns
+        assert metrics["sharpe_ratio"] > 0, \
+            f"Sharpe should be positive for consistent gains, got {metrics['sharpe_ratio']}"
+
+    def test_max_drawdown_calculation(self):
+        """Max drawdown should be calculated correctly."""
+        from src.analysis import calculate_staggered_metrics
+
+        # Returns that create a drawdown
+        # 0.10, -0.20, -0.10, 0.05 -> cumulative: 1.1, 0.88, 0.792, 0.832
+        # Peak at 1.1, trough at 0.792, drawdown = (0.792 - 1.1) / 1.1 = -0.28
+        monthly_returns = pd.Series(
+            [0.10, -0.20, -0.10, 0.05],
+            index=pd.date_range("2021-01-31", periods=4, freq="ME"),
+        )
+        cumulative_returns = (1 + monthly_returns).cumprod() - 1
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=monthly_returns,
+            cumulative_returns=cumulative_returns,
+        )
+
+        metrics = calculate_staggered_metrics(mock_result)
+
+        # Max drawdown should be negative (function returns max_drawdown, not max_drawdown_pct)
+        assert metrics["max_drawdown"] < 0, \
+            f"Max drawdown should be negative, got {metrics['max_drawdown']}"
+
+    def test_annualized_return_positive_for_gains(self):
+        """Annualized return should be positive for net positive monthly returns."""
+        from src.analysis import calculate_staggered_metrics
+
+        # Net positive monthly returns
+        monthly_returns = pd.Series(
+            [0.05, 0.03, -0.02, 0.04],  # Net positive
+            index=pd.date_range("2021-01-31", periods=4, freq="ME"),
+        )
+        cumulative_returns = (1 + monthly_returns).cumprod() - 1
+
+        mock_result = MockStaggeredResultForMetrics(
+            monthly_returns=monthly_returns,
+            cumulative_returns=cumulative_returns,
+        )
+
+        metrics = calculate_staggered_metrics(mock_result)
+
+        # Annualized return should be positive for net gains
+        assert metrics["annualized_return"] > 0, \
+            f"Annualized return should be positive for net gains, got {metrics['annualized_return']}"
+
+        # Avg monthly return should also be positive
+        assert metrics["avg_monthly_return"] > 0, \
+            f"Avg monthly return should be positive, got {metrics['avg_monthly_return']}"
