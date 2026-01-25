@@ -84,11 +84,12 @@ def calculate_metrics(
     else:
         profit_factor = gross_profit / gross_loss
 
-    # Sharpe ratio (annualized)
-    returns = equity_curve.pct_change().dropna()
-    if len(returns) > 0 and returns.std() > 0:
+    # Sharpe ratio (annualized) using log returns for geometric mean property
+    # Log returns ensure Sharpe sign is consistent with total compound return
+    log_returns = np.log(equity_curve).diff().dropna()
+    if len(log_returns) > 0 and log_returns.std() > 0:
         # Assume ~252 trading days per year
-        excess_returns = returns - risk_free_rate / 252
+        excess_returns = log_returns - risk_free_rate / 252
         sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
     else:
         sharpe = 0
@@ -1211,9 +1212,12 @@ def calculate_staggered_metrics(
     annualized_return = (1 + avg_monthly_return) ** 12 - 1
     annualized_volatility = monthly_std * np.sqrt(12)
 
-    # Sharpe ratio (annualized) - use std of excess returns, not original returns
+    # Sharpe ratio (annualized) using log returns for sign consistency with total return
+    # For percentage returns, log transform is: ln(1 + r)
     monthly_rf = risk_free_rate / 12
-    excess_returns = monthly_returns - monthly_rf
+    log_returns = np.log(1 + monthly_returns)
+    log_rf = np.log(1 + monthly_rf)
+    excess_returns = log_returns - log_rf
     excess_std = excess_returns.std()
     if excess_std > 0:
         sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
@@ -1536,21 +1540,35 @@ def calculate_ggr_dollar_metrics(
         ann_return_fully_invested = 0
         ann_return_committed = 0
 
-    # Sharpe ratio (annualized) - use the properly calculated monthly returns
-    # from the staggered portfolio methodology, not P&L-based returns.
-    # The result.monthly_returns is averaged across active portfolios and represents
-    # true portfolio performance, while P&L-based returns measure exit timing.
-    monthly_returns = result.monthly_returns.dropna()
-    monthly_rf = risk_free_rate / 12
-    excess_returns = monthly_returns - monthly_rf
-    excess_std = excess_returns.std()
-    if len(excess_returns) > 1 and excess_std > 0:
-        sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+    # Max drawdown and Sharpe from cumulative P&L
+    cumulative_pnl = calculate_cumulative_pnl_series(all_trades)
+
+    # Sharpe ratio (annualized) using P&L-based returns for consistency with Ann. Return
+    # Convert cumulative P&L to monthly returns based on capital committed
+    if len(cumulative_pnl) > 1 and capital_committed > 0:
+        # Resample to month-end values
+        monthly_pnl = cumulative_pnl.resample("ME").last().dropna()
+        # Calculate month-over-month P&L change
+        monthly_pnl_change = monthly_pnl.diff().dropna()
+        # Convert to returns (P&L change / capital base)
+        monthly_pnl_returns = monthly_pnl_change / capital_committed
+
+        if len(monthly_pnl_returns) > 1:
+            # Use log returns for sign consistency
+            # For small returns, ln(1+r) ≈ r, but this ensures correct sign
+            log_returns = np.log(1 + monthly_pnl_returns)
+            monthly_rf = risk_free_rate / 12
+            log_rf = np.log(1 + monthly_rf)
+            excess_returns = log_returns - log_rf
+            excess_std = excess_returns.std()
+            if excess_std > 0:
+                sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+            else:
+                sharpe = 0
+        else:
+            sharpe = 0
     else:
         sharpe = 0
-
-    # Max drawdown from cumulative P&L
-    cumulative_pnl = calculate_cumulative_pnl_series(all_trades)
     if len(cumulative_pnl) > 0:
         # Peak (high water mark) at each point
         rolling_max = cumulative_pnl.expanding().max()

@@ -977,9 +977,10 @@ class TestMaxAdverseExcursion:
 
         for trade in long_trades:
             # MAE should be at least as extreme as entry
-            # For long spread entered at negative distance, MAE tracks the more negative extreme
-            assert trade.max_adverse_spread >= trade.entry_distance, \
-                f"Long spread MAE {trade.max_adverse_spread} should be >= entry {trade.entry_distance}"
+            # For long spread entered at negative distance (e.g., -2.5σ), MAE tracks the minimum
+            # (most negative) value (e.g., -3.0σ), so MAE <= entry_distance
+            assert trade.max_adverse_spread <= trade.entry_distance, \
+                f"Long spread MAE {trade.max_adverse_spread} should be <= entry {trade.entry_distance}"
 
     def test_mae_captures_worst_case(self):
         """MAE should capture the most extreme spread during trade.

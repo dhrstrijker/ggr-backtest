@@ -378,6 +378,14 @@ def run_backtest_single_pair(
                 continue
 
         # Check for entry signals (only if flat) - GGR uses static σ
+        # NOTE on entry_distance semantics:
+        # - Signal threshold is checked at day i (current_distance)
+        # - But entry_distance records the distance at actual execution time:
+        #   - wait_days=0: entry_distance = current_distance (same day)
+        #   - wait_days=1: entry_distance = distance_arr[i+1] (next day)
+        # This reflects the distance when the trade actually enters, not when
+        # the signal triggered. The entry distance may differ from the threshold
+        # that triggered the signal due to overnight price movements.
         if position is None:
             signal = 0
             if current_distance > entry_level:
@@ -503,7 +511,16 @@ def run_backtest_single_pair(
         )
         trades.append(trade)
         # Update equity (entry commission already deducted at entry)
-        equity[-1] += gross_pnl - exit_commission
+        # Use consistent pattern with normal exits: compute new equity value explicitly
+        exit_date = dates[-1]
+        new_equity = equity[-1] + gross_pnl - exit_commission
+        if equity_dates[-1] == exit_date:
+            # Date already exists from "no change" append in loop, update in place
+            equity[-1] = new_equity
+        else:
+            # Date doesn't exist yet, append new entry
+            equity.append(new_equity)
+            equity_dates.append(exit_date)
 
     equity_series = pd.Series(equity, index=equity_dates)
 

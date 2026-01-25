@@ -244,7 +244,7 @@ class DataStore:
                     losses = [t for t in pair_trades if t.pnl < 0]
                     # Win rate excludes break-even trades (matching src/analysis.py)
                     decided_trades = len(wins) + len(losses)
-                    win_rate = (len(wins) / decided_trades * 100) if decided_trades > 0 else 0
+                    win_rate = (len(wins) / decided_trades) if decided_trades > 0 else 0
                 else:
                     total_pnl = 0
                     win_rate = 0
@@ -254,7 +254,7 @@ class DataStore:
                     "cycles_traded": cycles_with_pair,
                     "total_trades": len(pair_trades),
                     "total_pnl": total_pnl,
-                    "win_rate": win_rate,  # Stored as percentage (e.g., 66.7)
+                    "win_rate": win_rate,  # Stored as decimal (e.g., 0.667)
                 }
 
         print(f"  Aggregated stats for {len(self.pair_stats_wait_1)} unique pairs (Wait-1)")

@@ -379,7 +379,7 @@ def validate_price_data(
 
     # Check for extreme price jumps
     for col in prices.columns:
-        pct_change = prices[col].pct_change(fill_method=None).abs()
+        pct_change = prices[col].pct_change().abs()
         extreme_jumps = pct_change[pct_change > max_daily_change]
         if len(extreme_jumps) > 0:
             for date, change in extreme_jumps.items():
