@@ -466,3 +466,185 @@ class TestVectorizedSSDEquivalence:
             ssd_default.values, ssd_vec.values, rtol=1e-10,
             err_msg="Default calculate_ssd_matrix should use vectorized version"
         )
+
+
+# -----------------------------------------------------------------------------
+# Bug Fix Tests - normalize_prices Zero Handling (Bug #3)
+# -----------------------------------------------------------------------------
+
+
+class TestNormalizePricesZeroHandling:
+    """Tests for zero/negative price handling in normalization (Bug #3 fix)."""
+
+    def test_normalize_zero_first_price_filtered(self):
+        """Column with first price = 0 should be dropped."""
+        prices = pd.DataFrame({
+            'A': [100.0, 101.0, 102.0],
+            'B': [0.0, 50.0, 51.0],  # First price is 0
+            'C': [200.0, 201.0, 202.0]
+        })
+        result = normalize_prices(prices)
+
+        assert 'B' not in result.columns, "Column with first price 0 should be dropped"
+        assert 'A' in result.columns, "Valid column A should remain"
+        assert 'C' in result.columns, "Valid column C should remain"
+
+    def test_normalize_negative_first_price_filtered(self):
+        """Column with first price < 0 should be dropped (data error)."""
+        prices = pd.DataFrame({
+            'A': [100.0, 101.0, 102.0],
+            'B': [-10.0, 50.0, 51.0],  # Negative first price
+        })
+        result = normalize_prices(prices)
+
+        assert 'B' not in result.columns, "Column with negative first price should be dropped"
+        assert 'A' in result.columns, "Valid column A should remain"
+
+    def test_normalize_all_zero_first_prices(self):
+        """All columns with zero first price returns empty DataFrame."""
+        prices = pd.DataFrame({
+            'A': [0.0, 101.0, 102.0],
+            'B': [0.0, 50.0, 51.0],
+        })
+        result = normalize_prices(prices)
+
+        assert result.empty, "Result should be empty when all columns have zero first price"
+
+    def test_normalize_no_infinity_values(self):
+        """Result should never contain infinity values."""
+        prices = pd.DataFrame({
+            'A': [100.0, 101.0, 102.0],
+            'B': [0.0001, 50.0, 51.0],  # Very small but valid
+        })
+        result = normalize_prices(prices)
+
+        assert not np.isinf(result.values).any(), "Result should never contain infinity values"
+
+    def test_normalize_empty_dataframe(self):
+        """Empty DataFrame should return empty DataFrame."""
+        prices = pd.DataFrame()
+        result = normalize_prices(prices)
+
+        assert result.empty
+
+
+# -----------------------------------------------------------------------------
+# Bug Fix Tests - Auto-Chunked SSD for Large Universes (Bug #9)
+# -----------------------------------------------------------------------------
+
+
+class TestAutoChunkedSSD:
+    """Tests for auto-selecting chunked SSD for large universes (Bug #9 fix)."""
+
+    def test_auto_selects_vectorized_for_small_universe(self):
+        """Small universes (< threshold) should use vectorized implementation."""
+        np.random.seed(42)
+        # 50 symbols (below default threshold of 200)
+        prices = pd.DataFrame(
+            np.random.randn(30, 50).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(50)]
+        )
+        normalized = normalize_prices(prices)
+
+        # Both should return same results
+        ssd_auto = calculate_ssd_matrix(normalized)  # Auto-selects
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_auto.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Auto-selected should match vectorized for small universe"
+        )
+
+    def test_chunked_matches_vectorized_results(self):
+        """Chunked and vectorized should produce identical results."""
+        np.random.seed(123)
+        prices = pd.DataFrame(
+            np.random.randn(30, 30).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(30)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+        ssd_chunked = _calculate_ssd_matrix_chunked(normalized, chunk_size=10)
+
+        np.testing.assert_allclose(
+            ssd_vec.values, ssd_chunked.values, rtol=1e-10,
+            err_msg="Chunked and vectorized should produce identical results"
+        )
+
+    def test_explicit_chunked_flag(self):
+        """Explicit use_chunked=True should use chunked implementation."""
+        np.random.seed(456)
+        prices = pd.DataFrame(
+            np.random.randn(30, 20).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(20)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_explicit_chunked = calculate_ssd_matrix(normalized, use_chunked=True)
+        ssd_chunked = _calculate_ssd_matrix_chunked(normalized)
+
+        np.testing.assert_allclose(
+            ssd_explicit_chunked.values, ssd_chunked.values, rtol=1e-10,
+            err_msg="Explicit use_chunked=True should use chunked implementation"
+        )
+
+    def test_explicit_vectorized_flag(self):
+        """Explicit use_chunked=False should use vectorized implementation."""
+        np.random.seed(789)
+        prices = pd.DataFrame(
+            np.random.randn(30, 20).cumsum(axis=0) + 100,
+            columns=[f'S{i}' for i in range(20)]
+        )
+        normalized = normalize_prices(prices)
+
+        ssd_explicit_vec = calculate_ssd_matrix(normalized, use_chunked=False)
+        ssd_vec = _calculate_ssd_matrix_vectorized(normalized)
+
+        np.testing.assert_allclose(
+            ssd_explicit_vec.values, ssd_vec.values, rtol=1e-10,
+            err_msg="Explicit use_chunked=False should use vectorized implementation"
+        )
+
+
+# -----------------------------------------------------------------------------
+# Bug Fix Tests - Configurable SSD Overlap Threshold (Bug #16)
+# -----------------------------------------------------------------------------
+
+
+class TestSSDOverlapThreshold:
+    """Tests for configurable SSD overlap threshold (Bug #16 fix)."""
+
+    def test_custom_overlap_threshold(self):
+        """Custom min_overlap should be respected."""
+        # Create data where overlap is ~60%
+        prices_a = pd.Series([100.0 + i for i in range(10)])
+        prices_b = pd.Series([100.0, np.nan, np.nan, np.nan, np.nan, 105.0, 106.0, 107.0, 108.0, 109.0])
+        # 6 valid points out of 10 = 60% overlap
+
+        # With 50% threshold (default), should work
+        ssd_50 = calculate_ssd(prices_a, prices_b, min_overlap=0.5)
+        assert np.isfinite(ssd_50), "60% overlap should pass 50% threshold"
+
+        # With 70% threshold, should return inf
+        ssd_70 = calculate_ssd(prices_a, prices_b, min_overlap=0.7)
+        assert np.isinf(ssd_70), "60% overlap should fail 70% threshold"
+
+    def test_default_overlap_threshold(self):
+        """Default 50% threshold should work as expected."""
+        prices_a = pd.Series([100.0 + i for i in range(10)])
+        prices_b = pd.Series([100.0, np.nan, np.nan, np.nan, np.nan, 105.0, 106.0, 107.0, 108.0, 109.0])
+        # 6 valid points = 60% overlap
+
+        ssd = calculate_ssd(prices_a, prices_b)  # Default min_overlap=0.5
+        assert np.isfinite(ssd), "60% overlap should pass default 50% threshold"
+
+    def test_exactly_threshold_overlap(self):
+        """Overlap exactly at threshold should pass."""
+        prices_a = pd.Series([100.0 + i for i in range(10)])
+        prices_b = pd.Series([100.0, np.nan, np.nan, np.nan, np.nan, 105.0, 106.0, 107.0, 108.0, 109.0])
+        # 6 valid points = 60% overlap
+
+        # With exactly 60% threshold
+        ssd = calculate_ssd(prices_a, prices_b, min_overlap=0.6)
+        assert np.isfinite(ssd), "60% overlap should pass 60% threshold"

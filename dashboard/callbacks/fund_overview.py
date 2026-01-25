@@ -193,11 +193,11 @@ def register_fund_overview_callbacks(app, data_store):
         win_rate = trade_metrics.get("win_rate", 0)
         profit_factor = trade_metrics.get("profit_factor", 0)
 
-        # Calculate avg win/loss from trades
+        # Calculate avg win/loss from trades (break-even excluded)
         wins = [t.pnl for t in trades if t.pnl > 0]
-        losses = [t.pnl for t in trades if t.pnl <= 0]
+        losses = [t.pnl for t in trades if t.pnl < 0]  # Strict less than
         avg_win = sum(wins) / len(wins) if wins else 0
-        avg_loss = sum(losses) / len(losses) if losses else 0
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0  # Use abs for consistency
 
         # Calculate avg holding days
         holding_days = [t.holding_days for t in trades]

@@ -955,9 +955,10 @@ class TestZeroInterestAssumption:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=60, freq='D')
 
+        # Use DIFFERENT patterns for A and B to get non-zero spread volatility (Bug #8 fix)
         formation_close = pd.DataFrame({
             'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
         }, index=formation_dates)
 
         # Create a pattern: diverge early, converge, then stay flat (no more trades)

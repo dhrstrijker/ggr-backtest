@@ -257,7 +257,7 @@ class TestCalculateMetrics:
         assert metrics["total_return_pct"] == 0.2  # (12000 - 10000) / 10000
 
     def test_profit_factor_all_winners_no_losses(self):
-        """Profit factor with no losses should equal gross profit (denominator defaults to 1)."""
+        """Profit factor with no losses should equal infinity (Bug #6 fix)."""
         trades = [
             create_trade(pnl=300.0),  # Win
             create_trade(pnl=200.0),  # Win
@@ -270,11 +270,9 @@ class TestCalculateMetrics:
 
         metrics = calculate_metrics(trades, equity)
 
-        # With no losses, implementation uses gross_loss=1 to avoid division by zero
-        # So profit_factor = gross_profit / 1 = 600
-        expected_profit_factor = 300.0 + 200.0 + 100.0  # = 600
-        assert metrics["profit_factor"] == expected_profit_factor, \
-            f"Profit factor with no losses should be gross profit ({expected_profit_factor}), got {metrics['profit_factor']}"
+        # With no losses, profit factor should be infinity (dimensionless ratio)
+        assert metrics["profit_factor"] == float("inf"), \
+            f"Profit factor with all winners should be infinity, got {metrics['profit_factor']}"
 
     def test_sharpe_ratio_handles_zero_volatility(self):
         """Sharpe ratio with zero return volatility should handle gracefully."""
@@ -640,3 +638,149 @@ class TestCalculateCumulativePnlSeries:
         assert len(result) == 1
         # Total P&L: 100 + 150 + 50 = 300
         assert result.iloc[0] == 300.0
+
+
+# -----------------------------------------------------------------------------
+# Bug Fix Tests - Win/Loss Classification (Bug #4)
+# -----------------------------------------------------------------------------
+
+
+class TestWinLossClassification:
+    """Tests for correct win/loss/breakeven classification (Bug #4 fix)."""
+
+    def test_breakeven_not_counted_as_loss(self):
+        """Trade with P&L = 0 should not be in losses list."""
+        trades = [
+            create_trade(pnl=100.0),  # Win
+            create_trade(pnl=-50.0),  # Loss
+            create_trade(pnl=0.0),    # Break-even
+            create_trade(pnl=200.0),  # Win
+            create_trade(pnl=-100.0), # Loss
+        ]
+        equity = pd.Series(
+            [10000.0, 10150.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Win rate should be 2 / 4 = 50% (2 wins, 2 losses, 1 breakeven excluded)
+        assert metrics["win_rate"] == pytest.approx(0.5), \
+            f"Win rate should be 50% with 2 wins and 2 losses, got {metrics['win_rate']}"
+
+    def test_win_rate_excludes_breakeven(self):
+        """Win rate should be wins / (wins + losses), excluding breakeven."""
+        trades = [
+            create_trade(pnl=100.0),  # Win
+            create_trade(pnl=-50.0),  # Loss
+            create_trade(pnl=0.0),    # Break-even
+        ]
+        equity = pd.Series(
+            [10000.0, 10050.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # 1 win, 1 loss, 1 breakeven -> win rate = 1/2 = 50%
+        assert metrics["win_rate"] == pytest.approx(0.5), \
+            f"Win rate should be 50% (1 win / 2 decided), got {metrics['win_rate']}"
+
+    def test_all_breakeven_trades(self):
+        """All breakeven trades should result in 0 win rate."""
+        trades = [
+            create_trade(pnl=0.0),
+            create_trade(pnl=0.0),
+            create_trade(pnl=0.0),
+        ]
+        equity = pd.Series(
+            [10000.0, 10000.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # No decided trades (all breakeven), win rate should be 0
+        assert metrics["win_rate"] == 0, \
+            f"Win rate should be 0 with all breakeven trades, got {metrics['win_rate']}"
+
+    def test_avg_loss_excludes_breakeven(self):
+        """Average loss should only consider actual losses."""
+        trades = [
+            create_trade(pnl=100.0),   # Win
+            create_trade(pnl=-100.0),  # Loss
+            create_trade(pnl=0.0),     # Break-even
+            create_trade(pnl=-200.0),  # Loss
+        ]
+        equity = pd.Series(
+            [10000.0, 9800.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # avg_loss = (100 + 200) / 2 = 150 (positive magnitude)
+        assert metrics["avg_loss"] == pytest.approx(150.0), \
+            f"avg_loss should be 150 (avg of |100| and |200|), got {metrics['avg_loss']}"
+
+
+# -----------------------------------------------------------------------------
+# Bug Fix Tests - Profit Factor Edge Cases (Bug #6)
+# -----------------------------------------------------------------------------
+
+
+class TestProfitFactorEdgeCases:
+    """Tests for profit factor edge cases (Bug #6 fix)."""
+
+    def test_profit_factor_all_winners_returns_infinity(self):
+        """All winning trades should return profit_factor = inf."""
+        trades = [
+            create_trade(pnl=100.0),
+            create_trade(pnl=200.0),
+            create_trade(pnl=300.0),
+        ]
+        equity = pd.Series(
+            [10000.0, 10600.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # With no losses, profit factor should be infinity
+        assert metrics["profit_factor"] == float("inf"), \
+            f"Profit factor with all winners should be inf, got {metrics['profit_factor']}"
+
+    def test_profit_factor_all_losers_returns_zero(self):
+        """All losing trades should return profit_factor = 0."""
+        trades = [
+            create_trade(pnl=-100.0),
+            create_trade(pnl=-200.0),
+            create_trade(pnl=-300.0),
+        ]
+        equity = pd.Series(
+            [10000.0, 9400.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # With no wins, profit factor should be 0
+        assert metrics["profit_factor"] == 0, \
+            f"Profit factor with all losers should be 0, got {metrics['profit_factor']}"
+
+    def test_profit_factor_is_dimensionless_ratio(self):
+        """Profit factor should be ratio, not dollar amount."""
+        trades = [
+            create_trade(pnl=100.0),  # Win
+            create_trade(pnl=-50.0),  # Loss
+        ]
+        equity = pd.Series(
+            [10000.0, 10050.0],
+            index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
+        )
+
+        metrics = calculate_metrics(trades, equity)
+
+        # Profit factor = 100 / 50 = 2.0 (ratio)
+        assert metrics["profit_factor"] == 2.0, \
+            f"Profit factor should be 2.0 (100/50 ratio), got {metrics['profit_factor']}"

@@ -22,9 +22,9 @@ def create_test_data():
     formation_a = pd.Series(100.0, index=formation_dates)
     formation_b = pd.Series(100.0, index=formation_dates)
 
-    # Add slight variation to get non-zero std
+    # Add DIFFERENT variations to get non-zero spread std (Bug #8 fix requires this)
     formation_a = formation_a + np.sin(np.arange(30)) * 0.5
-    formation_b = formation_b + np.sin(np.arange(30)) * 0.5
+    formation_b = formation_b + np.cos(np.arange(30)) * 0.5  # Different pattern!
 
     formation_close = pd.DataFrame({
         "A": formation_a,

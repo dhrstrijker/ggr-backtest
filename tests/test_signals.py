@@ -439,3 +439,82 @@ class TestSpreadCalculation:
         assert spread.iloc[0] == 50.0  # 100 - 50
         assert spread.iloc[1] == 55.0  # 110 - 55
         assert spread.iloc[2] == 60.0  # 120 - 60
+
+
+class TestCrossesZeroHelper:
+    """Tests for _crosses_zero helper function (Bug #2, #12 fix)."""
+
+    def test_crosses_zero_positive_to_negative(self):
+        """0.1 -> -0.1 should return True."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(0.1, -0.1) == True
+
+    def test_crosses_zero_negative_to_positive(self):
+        """-0.1 -> 0.1 should return True."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(-0.1, 0.1) == True
+
+    def test_no_cross_same_sign_positive(self):
+        """0.1 -> 0.2 should return False."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(0.1, 0.2) == False
+
+    def test_no_cross_same_sign_negative(self):
+        """-0.2 -> -0.1 should return False."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(-0.2, -0.1) == False
+
+    def test_no_cross_with_nan_prev(self):
+        """NaN -> -0.1 should return False."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(np.nan, -0.1) == False
+
+    def test_no_cross_with_nan_current(self):
+        """0.1 -> NaN should return False."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(0.1, np.nan) == False
+
+    def test_no_cross_both_nan(self):
+        """NaN -> NaN should return False."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(np.nan, np.nan) == False
+
+    def test_cross_to_exactly_zero(self):
+        """0.1 -> 0.0 should return True (touches zero)."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(0.1, 0.0) == True
+
+    def test_cross_from_exactly_zero(self):
+        """0.0 -> -0.1 should return True."""
+        from src.signals import _crosses_zero
+        assert _crosses_zero(0.0, -0.1) == True
+
+
+class TestNaNGapCrossingDetection:
+    """Tests for crossing detection with NaN gaps (Bug #2 fix)."""
+
+    def test_crossing_detection_with_single_nan(self):
+        """Spread: [0.1, NaN, -0.1] should not false-trigger on NaN gap."""
+        formation_std = 0.05
+        # Entry on day 1, NaN gap, then converged on day 3
+        spread = pd.Series([0.0, 0.12, np.nan, -0.01])
+        signals = generate_signals_ggr(spread, formation_std, entry_threshold=2.0)
+
+        # Should have entry at index 1
+        assert signals.iloc[1] == -1, "Should enter short at spread=0.12"
+
+        # No false signals during or after NaN
+        # (The exit happens internally when spread crosses zero)
+
+    def test_no_false_crossing_nan_to_nan(self):
+        """NaN -> NaN sequence should not trigger false crossing."""
+        formation_std = 0.05
+        spread = pd.Series([0.0, 0.12, np.nan, np.nan, np.nan, 0.05])
+        signals = generate_signals_ggr(spread, formation_std, entry_threshold=2.0)
+
+        # Should still be in position (spread didn't cross zero)
+        # Entry at index 1, no exit until crossing
+        assert signals.iloc[1] == -1, "Should enter short at spread=0.12"
+
+        # No additional entries (still in position)
+        assert signals.iloc[5] == 0, "Should not have new entry at index 5"

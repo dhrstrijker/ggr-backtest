@@ -538,9 +538,10 @@ class TestForcedLiquidation:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Use DIFFERENT patterns for A and B to get non-zero spread volatility
         formation_close = pd.DataFrame({
             'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
         }, index=formation_dates)
 
         # Prices that diverge and NEVER converge (never cross zero)
@@ -581,9 +582,10 @@ class TestForcedLiquidation:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Use DIFFERENT patterns for A and B to get non-zero spread volatility
         formation_close = pd.DataFrame({
             'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
         }, index=formation_dates)
 
         # Stock A has price data, but B goes to NaN mid-series
@@ -624,9 +626,10 @@ class TestNegativeSpread:
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
         trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
 
+        # Use DIFFERENT patterns for A and B to get non-zero spread volatility
         formation_close = pd.DataFrame({
             'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
-            'B': [100.0 + np.sin(i/5) * 5 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
         }, index=formation_dates)
 
         # A drops relative to B (negative spread = A underperforms)
@@ -1175,3 +1178,205 @@ class TestDelistingHandling:
         # If trades were opened before delisting, they should exit with valid P&L
         for trade in result.trades:
             assert not np.isnan(trade.pnl), f"Trade P&L should not be NaN: {trade}"
+
+
+class TestHoldingDaysCalculation:
+    """Tests for correct holding_days calculation (Bug #1 fix)."""
+
+    def test_holding_days_single_day_trade(self):
+        """Entry and exit on consecutive days should be at least 2 days held.
+
+        With wait_days=0:
+        - Signal on day 0 -> entry on day 0
+        - If exit on day 0 as well, holding_days = 1
+
+        This test ensures the +1 fix is applied correctly.
+        """
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=10, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
+        }, index=formation_dates)
+
+        # Diverge on day 1, converge immediately on day 2
+        trading_close = pd.DataFrame({
+            'A': [100.0, 130.0, 100.0] + [100.0] * 7,  # Jump then immediate return
+            'B': [100.0] * 10,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+            wait_days=0,  # Same-day execution for tighter control
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        if result.trades:
+            trade = result.trades[0]
+            # Holding days should be at least 1 (same-day entry/exit)
+            # and should count inclusive of both entry and exit days
+            assert trade.holding_days >= 1, \
+                f"Holding days should be at least 1, got {trade.holding_days}"
+
+    def test_holding_days_max_holding_enforcement(self):
+        """With max_holding_days=5, trade should exit after exactly 5 days held."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=100, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
+        }, index=formation_dates)
+
+        # Prices diverge and NEVER converge (forces max_holding exit)
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [150.0] * 95,  # Jump and stay high
+            'B': [100.0] * 100,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=5,  # Force exit after exactly 5 days
+            capital_per_trade=10000,
+            wait_days=0,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should have trades that exit via max_holding
+        max_holding_exits = [t for t in result.trades if t.exit_reason == 'max_holding']
+        assert len(max_holding_exits) > 0, "Should have max_holding exits"
+
+        # Each max_holding trade should have exactly max_holding_days held
+        for trade in max_holding_exits:
+            assert trade.holding_days == config.max_holding_days, \
+                f"Trade holding_days should be {config.max_holding_days}, got {trade.holding_days}"
+
+
+class TestZeroFormationStd:
+    """Tests for zero formation standard deviation handling (Bug #8 fix)."""
+
+    def test_zero_std_pair_returns_no_trades(self):
+        """Pair with identical formation prices should produce no trades."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        # Formation: exactly zero spread volatility (identical prices)
+        formation_close = pd.DataFrame({
+            'A': [100.0] * 50,
+            'B': [100.0] * 50,
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 10 + [120.0] * 20,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        trading_open = trading_close.copy()
+
+        config = BacktestConfig(
+            entry_threshold=2.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should return empty trades (not crash)
+        assert result.trades == [], \
+            "Zero formation std should return empty trades list"
+        assert len(result.equity_curve) > 0, \
+            "Should still have equity curve"
+
+
+class TestZeroEntryPriceHandling:
+    """Tests for zero/negative entry price handling (Bug #7 fix)."""
+
+    def test_zero_entry_price_skipped(self):
+        """Entry should be skipped when price is 0."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
+        }, index=formation_dates)
+
+        # Signal would trigger, but entry price is 0
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [120.0] * 25,  # Triggers entry signal
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        # Open prices have zero for first few days
+        trading_open = pd.DataFrame({
+            'A': [0.0] * 10 + [120.0] * 20,  # Zero prices initially
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+            wait_days=1,  # Entry at next open
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should not have trades with infinity shares
+        for trade in result.trades:
+            assert np.isfinite(trade.shares_a), "Shares A should be finite"
+            assert np.isfinite(trade.shares_b), "Shares B should be finite"
+
+    def test_negative_entry_price_skipped(self):
+        """Entry should be skipped when price is negative (data error)."""
+        formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=30, freq='D')
+
+        formation_close = pd.DataFrame({
+            'A': [100.0 + np.sin(i/5) * 3 for i in range(50)],
+            'B': [100.0 + np.cos(i/5) * 3 for i in range(50)],
+        }, index=formation_dates)
+
+        trading_close = pd.DataFrame({
+            'A': [100.0] * 5 + [120.0] * 25,
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        # Open prices have negative values (data error)
+        trading_open = pd.DataFrame({
+            'A': [-10.0] * 10 + [120.0] * 20,  # Negative prices
+            'B': [100.0] * 30,
+        }, index=trading_dates)
+
+        config = BacktestConfig(
+            entry_threshold=1.0,
+            max_holding_days=50,
+            capital_per_trade=10000,
+            wait_days=1,
+        )
+
+        result = run_backtest_single_pair(
+            formation_close, trading_close, trading_open, ('A', 'B'), config
+        )
+
+        # Should not have trades with negative shares
+        for trade in result.trades:
+            assert trade.shares_a > 0, "Shares A should be positive"
+            assert trade.shares_b > 0, "Shares B should be positive"

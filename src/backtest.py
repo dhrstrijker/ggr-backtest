@@ -19,6 +19,7 @@ from .signals import (
     calculate_formation_stats,
     calculate_distance,
     generate_signals_ggr,
+    _crosses_zero,
 )
 
 
@@ -137,6 +138,15 @@ def run_backtest_single_pair(
     formation_stats = calculate_formation_stats(formation_spread)
     formation_std = formation_stats['std']
 
+    # Skip pairs with zero or NaN volatility (can't generate meaningful signals)
+    if formation_std == 0 or pd.isna(formation_std):
+        return BacktestResult(
+            trades=[],
+            equity_curve=pd.Series([config.capital_per_trade], index=[trading_close.index[0]]),
+            config=config,
+            pair=pair,
+        )
+
     # Calculate trading period spread (normalized from START of trading period)
     trading_spread = calculate_spread(
         trading_close[sym_a],
@@ -168,6 +178,10 @@ def run_backtest_single_pair(
     position = None
     position_entry_idx = None
 
+    # Cache last valid prices for efficient delisting detection (O(1) instead of O(n) lookup)
+    last_valid_price_a = None
+    last_valid_price_b = None
+
     entry_level = config.entry_threshold  # In σ units
 
     for i in range(n_days - 1):  # -1 because we execute next day
@@ -180,19 +194,21 @@ def run_backtest_single_pair(
         current_price_a = close_a_arr[i]
         current_price_b = close_b_arr[i]
 
+        # Update cached last valid prices (O(1) per iteration instead of O(n) lookup on delisting)
+        if not pd.isna(current_price_a):
+            last_valid_price_a = current_price_a
+        if not pd.isna(current_price_b):
+            last_valid_price_b = current_price_b
+
         # Check for delisting (NaN prices) when we have an open position
         if position is not None:
             is_delisted = pd.isna(current_price_a) or pd.isna(current_price_b)
             if is_delisted:
-                # Use last valid prices for exit
-                # Look backwards to find last valid price
-                last_valid_a = trading_close[sym_a].iloc[:i+1].dropna().iloc[-1] if trading_close[sym_a].iloc[:i+1].notna().any() else position["entry_price_a"]
-                last_valid_b = trading_close[sym_b].iloc[:i+1].dropna().iloc[-1] if trading_close[sym_b].iloc[:i+1].notna().any() else position["entry_price_b"]
-
-                exit_price_a = last_valid_a
-                exit_price_b = last_valid_b
+                # Use cached last valid prices for exit (O(1) lookup)
+                exit_price_a = last_valid_price_a if last_valid_price_a is not None else position["entry_price_a"]
+                exit_price_b = last_valid_price_b if last_valid_price_b is not None else position["entry_price_b"]
                 exit_date = current_date
-                days_held = i - position_entry_idx
+                days_held = i - position_entry_idx + 1  # +1 because we count both entry and exit days
 
                 # Calculate P&L
                 if position["direction"] == 1:
@@ -248,7 +264,7 @@ def run_backtest_single_pair(
 
         # Check for exit conditions
         if position is not None:
-            days_held = i - position_entry_idx
+            days_held = i - position_entry_idx + 1  # +1 because we count both entry and exit days
             should_exit = False
             exit_reason = None
 
@@ -267,14 +283,10 @@ def run_backtest_single_pair(
                 should_exit = True
                 exit_reason = "max_holding"
 
-            # GGR exit: Check for spread crossing zero (sign change)
+            # GGR exit: Check for spread crossing zero (sign change) - NaN-safe
             if not should_exit and i > 0:
                 prev_spread = spread_arr[i - 1]
-                crossed_zero = (
-                    (prev_spread > 0 and current_spread <= 0) or
-                    (prev_spread < 0 and current_spread >= 0)
-                )
-                if crossed_zero:
+                if _crosses_zero(prev_spread, current_spread):
                     should_exit = True
                     exit_reason = "crossing"
 
@@ -370,8 +382,9 @@ def run_backtest_single_pair(
                     entry_date = next_date
                     entry_idx = i + 1
 
-                # Skip entry if prices are NaN (e.g., stock delisted before entry)
-                if pd.isna(entry_price_a) or pd.isna(entry_price_b):
+                # Skip entry if prices are NaN, zero, or negative (data error)
+                if (pd.isna(entry_price_a) or pd.isna(entry_price_b) or
+                    entry_price_a <= 0 or entry_price_b <= 0):
                     equity.append(equity[-1])
                     equity_dates.append(next_date)
                     continue
@@ -441,7 +454,8 @@ def run_backtest_single_pair(
         total_commission = entry_commission + exit_commission
         trade_pnl = gross_pnl - total_commission
 
-        days_held = len(dates) - 1 - position_entry_idx
+        # +1 because we count both entry and exit days (last day has index len(dates)-1)
+        days_held = len(dates) - position_entry_idx
 
         trade = Trade(
             pair=pair,

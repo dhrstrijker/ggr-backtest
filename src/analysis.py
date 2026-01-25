@@ -50,19 +50,24 @@ def calculate_metrics(
     initial_capital = equity_curve.iloc[0]
     total_return_pct = (equity_curve.iloc[-1] - initial_capital) / initial_capital
 
-    # Win rate
+    # Win rate (break-even trades excluded from both wins and losses)
     wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p <= 0]
-    win_rate = len(wins) / len(pnls) if pnls else 0
+    losses = [p for p in pnls if p < 0]  # Strict less than, excludes break-even
+    # Win rate calculated over decided trades only (wins + losses)
+    decided_trades = len(wins) + len(losses)
+    win_rate = len(wins) / decided_trades if decided_trades > 0 else 0
 
     # Average win/loss
     avg_win = np.mean(wins) if wins else 0
     avg_loss = abs(np.mean(losses)) if losses else 0
 
-    # Profit factor
+    # Profit factor (returns infinity if all winners, 0 if no winners)
     gross_profit = sum(wins) if wins else 0
-    gross_loss = abs(sum(losses)) if losses else 1
-    profit_factor = gross_profit / gross_loss if gross_loss != 0 else float("inf")
+    gross_loss = abs(sum(losses)) if losses else 0
+    if gross_loss == 0:
+        profit_factor = float("inf") if gross_profit > 0 else 0
+    else:
+        profit_factor = gross_profit / gross_loss
 
     # Sharpe ratio (annualized)
     returns = equity_curve.pct_change().dropna()
@@ -400,12 +405,13 @@ def generate_pair_report(
     total_trades = len(trades)
     if total_trades > 0:
         winning_trades = [t for t in trades if t.pnl > 0]
-        losing_trades = [t for t in trades if t.pnl <= 0]
+        losing_trades = [t for t in trades if t.pnl < 0]  # Strict less than
 
         total_pnl = sum(t.pnl for t in trades)
-        win_rate = len(winning_trades) / total_trades
+        decided_trades = len(winning_trades) + len(losing_trades)
+        win_rate = len(winning_trades) / decided_trades if decided_trades > 0 else 0
         avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
-        avg_loss = sum(t.pnl for t in losing_trades) / len(losing_trades) if losing_trades else 0
+        avg_loss = abs(sum(t.pnl for t in losing_trades) / len(losing_trades)) if losing_trades else 0
         avg_holding = sum(t.holding_days for t in trades) / total_trades
 
         long_trades = [t for t in trades if t.direction == 1]
@@ -868,7 +874,7 @@ def plot_duration_histogram(
         return fig
 
     winners = [t.holding_days for t in trades if t.pnl > 0]
-    losers = [t.holding_days for t in trades if t.pnl <= 0]
+    losers = [t.holding_days for t in trades if t.pnl < 0]  # Strict less than
 
     fig = go.Figure()
 

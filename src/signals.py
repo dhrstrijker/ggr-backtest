@@ -11,6 +11,29 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _crosses_zero(prev_spread: float, current_spread: float) -> bool:
+    """Check if spread crossed zero between two values.
+
+    NaN-safe: returns False if either value is NaN.
+
+    Args:
+        prev_spread: Previous spread value
+        current_spread: Current spread value
+
+    Returns:
+        True if spread crossed zero (sign change or touched zero), False otherwise
+    """
+    if pd.isna(prev_spread) or pd.isna(current_spread):
+        return False
+    # Cross from positive to zero/negative, or negative to zero/positive
+    # Also handle prev_spread exactly at zero moving away
+    return (
+        (prev_spread > 0 and current_spread <= 0) or
+        (prev_spread < 0 and current_spread >= 0) or
+        (prev_spread == 0 and current_spread != 0)  # Started at zero, moved away
+    )
+
+
 # =============================================================================
 # Core Functions
 # =============================================================================
@@ -120,7 +143,13 @@ def generate_signals_ggr(
         Series with signal values:
         - 1: Entry long spread (buy A, sell B)
         - -1: Entry short spread (sell A, buy B)
-        - 0: Exit or no action
+        - 0: No action (not an explicit exit signal)
+
+    Note:
+        This function returns entry signals only. Exit conditions are tracked
+        internally via position state. A value of 0 means "no new action",
+        not an explicit exit signal. Exits are implicit when the spread
+        crosses zero while in a position.
     """
     signals = pd.Series(index=spread.index, data=0, dtype=float)
     position = 0  # Track current position: 0 = flat, 1 = long, -1 = short
@@ -148,13 +177,8 @@ def generate_signals_ggr(
             if i > 0:
                 prev_spread = spread.iloc[i - 1]
 
-                # Check for sign change (crossing zero)
-                crossed_zero = (
-                    (prev_spread > 0 and current_spread <= 0) or
-                    (prev_spread < 0 and current_spread >= 0)
-                )
-
-                if crossed_zero:
+                # Check for sign change (crossing zero) - NaN-safe
+                if _crosses_zero(prev_spread, current_spread):
                     # Signal exit (0 after being in position)
                     position = 0
 

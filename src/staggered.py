@@ -142,11 +142,21 @@ def generate_portfolio_cycles(
     while start_idx + required_days <= len(all_dates):
         formation_start = all_dates[start_idx]
         formation_end_idx = start_idx + config.formation_days - 1
+
+        # Defensive bounds check for formation period
+        assert formation_end_idx < len(all_dates), (
+            f"Formation end index {formation_end_idx} exceeds data length {len(all_dates)}"
+        )
         formation_end = all_dates[formation_end_idx]
 
         trading_start_idx = formation_end_idx + 1
-        trading_start = all_dates[trading_start_idx]
         trading_end_idx = trading_start_idx + config.trading_days - 1
+
+        # Defensive bounds check for trading period
+        assert trading_end_idx < len(all_dates), (
+            f"Trading end index {trading_end_idx} exceeds data length {len(all_dates)}"
+        )
+        trading_start = all_dates[trading_start_idx]
         trading_end = all_dates[trading_end_idx]
 
         cycle = PortfolioCycle(

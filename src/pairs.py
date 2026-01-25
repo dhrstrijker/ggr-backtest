@@ -13,7 +13,7 @@ def normalize_prices(prices: pd.DataFrame) -> pd.DataFrame:
     Normalize prices by dividing each series by its first value.
 
     This makes all series start at 1.0 for fair comparison.
-    Handles NaN values by dropping columns where first price is NaN.
+    Handles invalid values by dropping columns where first price is NaN, zero, or negative.
 
     Args:
         prices: DataFrame with symbols as columns and prices as values
@@ -21,32 +21,53 @@ def normalize_prices(prices: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with normalized prices (all starting at 1.0)
     """
+    if prices.empty:
+        return prices
+
     # Check for NaN in first row - can't normalize without starting price
     first_row = prices.iloc[0]
     if first_row.isna().any():
         # Drop columns where first price is NaN
         valid_cols = first_row.dropna().index
         prices = prices[valid_cols]
+
+    if prices.empty:
+        return prices
+
+    # Check for zero or negative first prices - can't normalize safely (division by zero)
+    first_row = prices.iloc[0]
+    positive_cols = first_row[first_row > 0].index
+    if len(positive_cols) < len(first_row):
+        prices = prices[positive_cols]
+
+    if prices.empty:
+        return prices
+
     return prices / prices.iloc[0]
 
 
-def calculate_ssd(series_a: pd.Series, series_b: pd.Series) -> float:
+def calculate_ssd(
+    series_a: pd.Series,
+    series_b: pd.Series,
+    min_overlap: float = 0.5,
+) -> float:
     """
     Calculate Sum of Squared Differences between two series.
 
     Handles NaN values by only using dates where both series have valid data.
-    Returns infinity if less than 50% overlap to exclude pair from selection.
+    Returns infinity if overlap is below threshold to exclude pair from selection.
 
     Args:
         series_a: First price series (should be normalized)
         series_b: Second price series (should be normalized)
+        min_overlap: Minimum fraction of data overlap required (default 0.5 = 50%)
 
     Returns:
         Sum of squared differences (lower = more similar), or inf if insufficient overlap
     """
     # Only use dates where both have valid data
     valid_mask = series_a.notna() & series_b.notna()
-    if valid_mask.sum() < len(series_a) * 0.5:  # Require 50% overlap
+    if valid_mask.sum() < len(series_a) * min_overlap:
         return float('inf')  # Exclude pair from selection
     diff = series_a[valid_mask] - series_b[valid_mask]
     return float((diff ** 2).sum())
@@ -214,24 +235,34 @@ def _calculate_ssd_matrix_chunked(
 
 def calculate_ssd_matrix(
     normalized_prices: pd.DataFrame,
-    use_chunked: bool = False,
+    use_chunked: bool | None = None,
     chunk_size: int = 100,
+    auto_chunk_threshold: int = 200,
 ) -> pd.DataFrame:
     """
     Calculate SSD matrix for all pairs of symbols.
 
     Uses vectorized NumPy broadcasting for ~10-100x speedup over loop-based
-    implementation. For very large universes (1000+ stocks), use use_chunked=True
-    to limit memory usage.
+    implementation. Automatically switches to chunked computation for large
+    universes to limit memory usage.
 
     Args:
         normalized_prices: DataFrame with normalized prices
-        use_chunked: If True, use memory-efficient chunked computation
+        use_chunked: If True, use memory-efficient chunked computation.
+                    If None (default), auto-selects based on universe size.
         chunk_size: Chunk size for chunked computation (default 100)
+        auto_chunk_threshold: Symbol count threshold for auto-selecting chunked
+                             version (default 200)
 
     Returns:
         Symmetric DataFrame with SSD values for each pair
     """
+    n_symbols = len(normalized_prices.columns)
+
+    # Auto-select chunked version for large universes to avoid memory issues
+    if use_chunked is None:
+        use_chunked = n_symbols > auto_chunk_threshold
+
     if use_chunked:
         return _calculate_ssd_matrix_chunked(normalized_prices, chunk_size)
     return _calculate_ssd_matrix_vectorized(normalized_prices)
