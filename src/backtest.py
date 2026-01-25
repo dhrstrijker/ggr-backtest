@@ -504,7 +504,7 @@ def run_backtest_single_pair(
             pnl_pct=trade_pnl / config.capital_per_trade,
             holding_days=days_held,
             entry_distance=position["entry_distance"],
-            exit_distance=distance.iloc[-1],
+            exit_distance=distance.iloc[-1] if not pd.isna(distance.iloc[-1]) else position["entry_distance"],
             exit_reason="end_of_data",
             max_adverse_spread=position["max_adverse_distance"],
             cycle_id=cycle_id,

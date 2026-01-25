@@ -86,13 +86,17 @@ def calculate_metrics(
 
     # Sharpe ratio (annualized) using log returns for geometric mean property
     # Log returns ensure Sharpe sign is consistent with total compound return
-    log_returns = np.log(equity_curve).diff().dropna()
-    if len(log_returns) > 0 and log_returns.std() > 0:
-        # Assume ~252 trading days per year
-        excess_returns = log_returns - risk_free_rate / 252
-        sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
+    # Guard against zero/negative equity which would make log undefined
+    if (equity_curve <= 0).any():
+        sharpe = 0  # Can't compute log returns with non-positive equity
     else:
-        sharpe = 0
+        log_returns = np.log(equity_curve).diff().dropna()
+        if len(log_returns) > 0 and log_returns.std() > 0:
+            # Assume ~252 trading days per year
+            excess_returns = log_returns - risk_free_rate / 252
+            sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
+        else:
+            sharpe = 0
 
     # Max drawdown - compute percentage directly for robustness with NaN values
     rolling_max = equity_curve.expanding().max()
@@ -1214,15 +1218,19 @@ def calculate_staggered_metrics(
 
     # Sharpe ratio (annualized) using log returns for sign consistency with total return
     # For percentage returns, log transform is: ln(1 + r)
+    # Guard against returns <= -1 (100%+ loss) which would make log undefined
     monthly_rf = risk_free_rate / 12
-    log_returns = np.log(1 + monthly_returns)
-    log_rf = np.log(1 + monthly_rf)
-    excess_returns = log_returns - log_rf
-    excess_std = excess_returns.std()
-    if excess_std > 0:
-        sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+    if (monthly_returns <= -1).any():
+        sharpe = 0  # Can't compute log returns with 100%+ loss months
     else:
-        sharpe = 0
+        log_returns = np.log(1 + monthly_returns)
+        log_rf = np.log(1 + monthly_rf)
+        excess_returns = log_returns - log_rf
+        excess_std = excess_returns.std()
+        if excess_std > 0:
+            sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+        else:
+            sharpe = 0
 
     # Max drawdown from cumulative returns
     cumulative = (1 + monthly_returns).cumprod()
@@ -1556,15 +1564,19 @@ def calculate_ggr_dollar_metrics(
         if len(monthly_pnl_returns) > 1:
             # Use log returns for sign consistency
             # For small returns, ln(1+r) ≈ r, but this ensures correct sign
-            log_returns = np.log(1 + monthly_pnl_returns)
-            monthly_rf = risk_free_rate / 12
-            log_rf = np.log(1 + monthly_rf)
-            excess_returns = log_returns - log_rf
-            excess_std = excess_returns.std()
-            if excess_std > 0:
-                sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+            # Guard against returns <= -1 (100%+ loss) which would make log undefined
+            if (monthly_pnl_returns <= -1).any():
+                sharpe = 0  # Can't compute log returns with 100%+ loss months
             else:
-                sharpe = 0
+                log_returns = np.log(1 + monthly_pnl_returns)
+                monthly_rf = risk_free_rate / 12
+                log_rf = np.log(1 + monthly_rf)
+                excess_returns = log_returns - log_rf
+                excess_std = excess_returns.std()
+                if excess_std > 0:
+                    sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
+                else:
+                    sharpe = 0
         else:
             sharpe = 0
     else:
