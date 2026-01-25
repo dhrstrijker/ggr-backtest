@@ -142,6 +142,62 @@ configs/
 
 Config files specify: `symbols`, `start_date`, `end_date`, `formation_days`, `trading_days`, `overlap_days`, `n_pairs`, `entry_threshold`, `max_holding_days`, `capital_per_trade`, `commission`.
 
+## Testing
+
+The test suite contains **258 tests** covering all core modules. Tests are organized by module with shared fixtures for consistency.
+
+### Test Structure
+
+```
+tests/
+├── conftest.py                 # Shared pytest fixtures
+├── fixtures/
+│   └── known_outcomes.py       # Pre-calculated test scenarios
+├── test_analysis.py            # Metrics calculation tests
+├── test_backtest.py            # Core backtest logic
+├── test_backtest_wait_days.py  # Wait-0 vs Wait-1 execution
+├── test_data_functions.py      # Data fetching/processing
+├── test_data_integrity.py      # Data quality validation
+├── test_edge_cases.py          # Edge cases and error handling
+├── test_integration.py         # End-to-end pipeline tests
+├── test_signals.py             # Signal generation tests
+├── test_ssd.py                 # SSD matrix calculation
+└── test_staggered.py           # Staggered portfolio tests
+```
+
+### Shared Fixtures (`conftest.py`)
+
+Reusable fixtures eliminate code duplication:
+
+- **Date fixtures**: `formation_dates`, `trading_dates`, `sample_dates`
+- **Price fixtures**: `oscillating_formation_prices`, `diverging_trading_prices`, `prices_with_missing_data`
+- **Config fixtures**: `default_config`, `loose_entry_config`, `wait_zero_config`
+- **Factory fixtures**: `trade_factory` for creating Trade objects with custom P&L
+
+```python
+# Example usage in tests
+def test_something(diverging_trading_prices, default_config):
+    trading_close, trading_open = diverging_trading_prices
+    # ... test code
+```
+
+### Known Outcome Fixtures (`fixtures/known_outcomes.py`)
+
+Pre-calculated scenarios with manually verified expected results:
+
+- `SIMPLE_CONVERGENCE_FIXTURE`: Divergence then convergence, generates 1-2 trades
+- `KNOWN_METRICS_FIXTURE`: 5 trades with exact expected metrics (win rate, profit factor, etc.)
+- `NO_TRADE_FIXTURE`: Prices stay within 2σ, generates no trades
+
+### Running Tests
+
+```bash
+pytest tests/ -v                           # All tests
+pytest tests/test_backtest.py -v           # Single module
+pytest tests/ -k "wait_days"               # Filter by name
+pytest tests/ --tb=short                   # Shorter tracebacks
+```
+
 ## Environment
 
 Requires `POLYGON_API_KEY` in `.env` file for data fetching. Copy from `.env.example`.
