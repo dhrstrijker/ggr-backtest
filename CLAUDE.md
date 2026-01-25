@@ -66,6 +66,7 @@ Data uses UNION of dates (all trading days) rather than INTERSECTION. This allow
 - **`filter_valid_symbols()`**: 100% formation coverage required (no `min_data_pct` threshold)
 - **Entry validation**: Skips trade entry if prices are NaN
 - **Exit safety**: Uses last valid prices when end-of-data prices are NaN
+- **Exit distance fallback**: When `exit_distance` would be NaN (e.g., end-of-data with NaN prices), falls back to `entry_distance`
 
 ### Function Signatures
 
@@ -100,6 +101,7 @@ run_staggered_backtest(
 
 - **Win Rate**: Excludes break-even trades (pnl == 0) from both numerator and denominator. Formula: `wins / (wins + losses)`
 - **Monthly P&L**: Aggregated by EXIT month (when P&L is realized), not entry month
+- **Sharpe Ratio**: Uses log returns for sign consistency. Returns 0 (not NaN/-inf) when equity ≤ 0 or monthly returns ≤ -100%
 
 ### Dashboard
 
@@ -144,25 +146,27 @@ Config files specify: `symbols`, `start_date`, `end_date`, `formation_days`, `tr
 
 ## Testing
 
-The test suite contains **258 tests** covering all core modules. Tests are organized by module with shared fixtures for consistency.
+The test suite contains **277 tests** covering all core modules. Tests are organized by module with shared fixtures for consistency.
 
 ### Test Structure
 
 ```
 tests/
-├── conftest.py                 # Shared pytest fixtures
+├── conftest.py                       # Shared pytest fixtures
 ├── fixtures/
-│   └── known_outcomes.py       # Pre-calculated test scenarios
-├── test_analysis.py            # Metrics calculation tests
-├── test_backtest.py            # Core backtest logic
-├── test_backtest_wait_days.py  # Wait-0 vs Wait-1 execution
-├── test_data_functions.py      # Data fetching/processing
-├── test_data_integrity.py      # Data quality validation
-├── test_edge_cases.py          # Edge cases and error handling
-├── test_integration.py         # End-to-end pipeline tests
-├── test_signals.py             # Signal generation tests
-├── test_ssd.py                 # SSD matrix calculation
-└── test_staggered.py           # Staggered portfolio tests
+│   └── known_outcomes.py             # Pre-calculated test scenarios
+├── test_analysis.py                  # Metrics calculation tests
+├── test_backtest.py                  # Core backtest logic
+├── test_backtest_wait_days.py        # Wait-0 vs Wait-1 execution
+├── test_data_functions.py            # Data fetching/processing
+├── test_data_integrity.py            # Data quality validation
+├── test_edge_cases.py                # Edge cases and error handling
+├── test_integration.py               # End-to-end pipeline tests
+├── test_issue1_exit_distance_nan.py  # Exit distance NaN fallback tests
+├── test_issue2_sharpe_negative_equity.py  # Sharpe with edge cases
+├── test_signals.py                   # Signal generation tests
+├── test_ssd.py                       # SSD matrix calculation
+└── test_staggered.py                 # Staggered portfolio tests
 ```
 
 ### Shared Fixtures (`conftest.py`)
