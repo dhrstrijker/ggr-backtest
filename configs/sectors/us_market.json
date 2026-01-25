@@ -59,9 +59,10 @@
   "formation_days": 252,
   "trading_days": 126,
   "overlap_days": 21,
-  "n_pairs": 20,
+  "n_pairs": 5,
   "entry_threshold": 2.0,
   "max_holding_days": 126,
   "capital_per_trade": 10000.0,
-  "commission": 0.001
+  "commission": 0.001,
+  "wait_days": 1
 }

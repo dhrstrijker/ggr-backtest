@@ -77,7 +77,7 @@ class StaggeredConfig:
     formation_days: int = 252  # 12 months
     trading_days: int = 126  # 6 months
     overlap_days: int = 21  # ~1 month between portfolio starts
-    n_pairs: int = 20  # Top pairs per portfolio
+    n_pairs: int = 10  # Top pairs per portfolio
     backtest_config: BacktestConfig = field(default_factory=BacktestConfig)
 
 

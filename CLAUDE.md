@@ -30,8 +30,8 @@ pip install -r requirements.txt
 ### Data Flow
 ```
 Polygon.io API → src/data.py (fetch + cache) → src/pairs.py (SSD matrix)
-    → src/staggered.py (portfolio cycles) → src/backtest.py (trades)
-    → src/signals.py (formation stats + distance) → src/analysis.py (metrics + charts)
+    → src/staggered.py (portfolio cycles) → src/backtest.py (uses signals.py internally)
+    → src/analysis.py (metrics + charts)
 ```
 
 ### Key Modules

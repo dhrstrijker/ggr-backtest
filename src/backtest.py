@@ -81,7 +81,7 @@ class BacktestConfig:
     """
 
     entry_threshold: float = 2.0  # Entry at N sigma (from formation period)
-    max_holding_days: int = 20  # Maximum days to hold a position
+    max_holding_days: int = 126  # Maximum days to hold a position
     capital_per_trade: float = 10000.0  # Capital allocated per pair trade
     commission: float = 0.001  # Commission rate (0.1%)
     wait_days: int = 1  # Days to wait after signal (0 = same-day, 1 = next-day)

@@ -12,7 +12,7 @@ A Python implementation of the **Gatev, Goetzmann, and Rouwenhorst (GGR) Distanc
 - **Sector-Based Configuration**: CLI flags for utilities, tech, shipping, or S&P 500 universes
 - **Delisting Handling**: Graceful position closure when stocks delist mid-trade
 - **Performance Optimized**: Vectorized NumPy operations, SSD caching, and optional parallelization for 500+ stock universes
-- **Comprehensive Test Suite**: 183 tests covering methodology edge cases
+- **Comprehensive Test Suite**: 218 tests covering methodology edge cases
 
 ## Architecture Overview
 
@@ -26,7 +26,7 @@ flowchart LR
         DATA[data.py] --> PAIRS[pairs.py]
         PAIRS --> STAGGERED[staggered.py]
         STAGGERED --> BACKTEST[backtest.py]
-        BACKTEST --> SIGNALS[signals.py]
+        SIGNALS[signals.py] -.->|used by| BACKTEST
     end
 
     subgraph Output["Output"]
@@ -267,7 +267,7 @@ ggr-backtest/
 │   ├── data_store.py         # Pre-computed backtest results
 │   ├── layouts/              # Page layouts (fund overview, pairs, inspector)
 │   └── callbacks/            # Interactive callbacks
-├── tests/                    # 183 tests covering all methodology details
+├── tests/                    # 218 tests covering all methodology details
 │   ├── test_backtest.py
 │   ├── test_staggered.py
 │   ├── test_signals.py
@@ -446,7 +446,7 @@ result = run_staggered_backtest(
 
 ## Testing
 
-The test suite (183 tests) validates critical methodology assumptions:
+The test suite (218 tests) validates critical methodology assumptions:
 
 ### Backtest Tests (`test_backtest.py`)
 - Trade execution at next-day open (wait_days=1) or same-day close (wait_days=0)

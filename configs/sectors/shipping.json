@@ -14,5 +14,6 @@
   "entry_threshold": 2.0,
   "max_holding_days": 126,
   "capital_per_trade": 10000.0,
-  "commission": 0.001
+  "commission": 0.001,
+  "wait_days": 1
 }

@@ -125,7 +125,7 @@ class TestStaggeredConfig:
         assert config.formation_days == 252
         assert config.trading_days == 126
         assert config.overlap_days == 21
-        assert config.n_pairs == 20
+        assert config.n_pairs == 10
         assert isinstance(config.backtest_config, BacktestConfig)
 
     def test_custom_values(self):
