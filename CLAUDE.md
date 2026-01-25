@@ -96,13 +96,26 @@ run_staggered_backtest(
 
 `Trade` dataclass uses `entry_distance` and `exit_distance` (distance in σ units). Exit reasons: `'crossing'`, `'max_holding'`, `'end_of_data'`, `'delisting'`.
 
+### Metrics Calculation
+
+- **Win Rate**: Excludes break-even trades (pnl == 0) from both numerator and denominator. Formula: `wins / (wins + losses)`
+- **Monthly P&L**: Aggregated by EXIT month (when P&L is realized), not entry month
+
 ### Dashboard
 
 Interactive Dash web app in `dashboard/` directory:
 - **`dashboard.py`**: Main entry point with sector CLI flags
-- **`dashboard/data_store.py`**: Centralized data management, runs full backtest pipeline
-- **`dashboard/layouts/`**: Page layouts (Fund Overview, Pair Inspector, Pairs Summary)
+- **`dashboard/data_store.py`**: Centralized data management, runs full backtest pipeline for both wait modes
+- **`dashboard/layouts/`**: Page layouts (page1_fund_overview, page2_pair_inspector, page3_pairs_summary)
 - **`dashboard/callbacks/`**: Interactive callbacks for each page
+
+#### DataStore Wait-Mode Awareness
+
+The `DataStore` maintains separate data for Wait-0-Day and Wait-1-Day modes:
+- `pair_stats_wait_0` / `pair_stats_wait_1`: Aggregated pair statistics per mode
+- All getter methods accept `wait_mode: int = 1` parameter (e.g., `get_all_pairs(wait_mode)`, `get_spy_returns(wait_mode)`)
+- Win rate calculation excludes break-even trades (matching `src/analysis.py`)
+- Use `is_initialized()` to check if data loaded successfully
 
 #### Sector CLI Flags
 
