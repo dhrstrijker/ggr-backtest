@@ -17,5 +17,6 @@
   "max_holding_days": 126,
   "capital_per_trade": 10000.0,
   "commission": 0.001,
-  "wait_days": 1
+  "wait_days": 1,
+  "risk_free_rate": 0.02
 }

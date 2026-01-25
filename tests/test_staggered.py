@@ -865,18 +865,21 @@ class TestZeroInterestAssumption:
     def test_equity_curve_flat_between_trades(self):
         """Equity curve should be flat when no position is held."""
         formation_dates = pd.date_range('2023-01-01', periods=50, freq='D')
-        trading_dates = pd.date_range('2023-03-01', periods=60, freq='D')
+        trading_dates = pd.date_range('2023-03-01', periods=80, freq='D')
 
-        # Use DIFFERENT patterns for A and B to get non-zero spread volatility (Bug #8 fix)
+        # Use different patterns for A and B to get non-zero spread volatility
+        # baseline_a = 100, baseline_b = 105 (from cos(0))
         formation_close = pd.DataFrame({
             'A': [100.0 + np.sin(i/5) * 5 for i in range(50)],
             'B': [100.0 + np.cos(i/5) * 5 for i in range(50)],  # Different pattern
         }, index=formation_dates)
 
         # Create a pattern: diverge early, converge, then stay flat (no more trades)
-        # A spikes to 120 (20% divergence) then returns to 100, while B stays at 100
-        trading_a = [100.0] * 5 + [120.0] * 5 + [100.0] * 50  # Spike then flat
-        trading_b = [100.0] * 60
+        # For spread to be 0: A/baseline_a = B/baseline_b
+        # baseline_a = 100, baseline_b = 105, so A = 100, B = 105 gives zero spread
+        # A spikes to 120 (divergence) then returns to 100, while B goes from 105 to 105
+        trading_a = [100.0] * 5 + [120.0] * 5 + [100.0] * 70  # Spike then converge to baseline
+        trading_b = [105.0] * 80  # Stays at its formation baseline
 
         trading_close = pd.DataFrame({
             'A': trading_a,

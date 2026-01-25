@@ -158,7 +158,11 @@ class DataStore:
             backtest_config_wait_1,
             progress_callback=lambda i, n: print(f"    Cycle {i}/{n}") if i % 10 == 0 else None,
         )
-        self.metrics_wait_1 = calculate_staggered_metrics(self.staggered_result_wait_1)
+        risk_free_rate = self.config.get("risk_free_rate", 0.02)
+        self.metrics_wait_1 = calculate_staggered_metrics(
+            self.staggered_result_wait_1,
+            risk_free_rate=risk_free_rate,
+        )
         print(f"  Wait-1-Day: {len(self.staggered_result_wait_1.all_trades)} trades across {self.staggered_result_wait_1.total_portfolios} cycles")
 
         # Phase 2b: Run Wait-0-Day backtest
@@ -178,7 +182,10 @@ class DataStore:
             backtest_config_wait_0,
             progress_callback=lambda i, n: print(f"    Cycle {i}/{n}") if i % 10 == 0 else None,
         )
-        self.metrics_wait_0 = calculate_staggered_metrics(self.staggered_result_wait_0)
+        self.metrics_wait_0 = calculate_staggered_metrics(
+            self.staggered_result_wait_0,
+            risk_free_rate=risk_free_rate,
+        )
         print(f"  Wait-0-Day: {len(self.staggered_result_wait_0.all_trades)} trades across {self.staggered_result_wait_0.total_portfolios} cycles")
 
         # Calculate dollar-based GGR metrics
@@ -187,11 +194,13 @@ class DataStore:
             self.staggered_result_wait_1,
             self.config["capital_per_trade"],
             self.config["n_pairs"],
+            risk_free_rate=risk_free_rate,
         )
         self.ggr_metrics_wait_0 = calculate_ggr_dollar_metrics(
             self.staggered_result_wait_0,
             self.config["capital_per_trade"],
             self.config["n_pairs"],
+            risk_free_rate=risk_free_rate,
         )
 
     def _aggregate_pair_stats(self) -> None:

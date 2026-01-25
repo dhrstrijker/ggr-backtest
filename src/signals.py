@@ -43,6 +43,8 @@ def calculate_spread(
     prices_a: pd.Series,
     prices_b: pd.Series,
     normalize: bool = True,
+    baseline_a: float | None = None,
+    baseline_b: float | None = None,
 ) -> pd.Series:
     """
     Calculate the spread between two price series.
@@ -53,15 +55,23 @@ def calculate_spread(
     Args:
         prices_a: Price series for stock A (long leg)
         prices_b: Price series for stock B (short leg)
-        normalize: If True, normalize prices first (divide by first value)
+        normalize: If True, normalize prices first (divide by baseline or first value)
+        baseline_a: Optional baseline value for normalizing prices_a. If None, uses
+            first value of prices_a. This is useful for ensuring trading period
+            spreads use the same normalization baseline as formation period.
+        baseline_b: Optional baseline value for normalizing prices_b. If None, uses
+            first value of prices_b.
 
     Returns:
         Series representing the spread
     """
     if normalize:
+        # Use provided baseline or fall back to first value
+        base_a = baseline_a if baseline_a is not None else prices_a.iloc[0]
+        base_b = baseline_b if baseline_b is not None else prices_b.iloc[0]
         # Normalize to make series comparable
-        norm_a = prices_a / prices_a.iloc[0]
-        norm_b = prices_b / prices_b.iloc[0]
+        norm_a = prices_a / base_a
+        norm_b = prices_b / base_b
     else:
         norm_a = prices_a
         norm_b = prices_b

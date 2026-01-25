@@ -129,11 +129,18 @@ def run_backtest_single_pair(
     """
     sym_a, sym_b = pair
 
+    # Get formation baseline prices (used for BOTH formation and trading normalization)
+    # This ensures consistent normalization so that formation σ applies correctly to trading
+    formation_baseline_a = formation_close[sym_a].iloc[0]
+    formation_baseline_b = formation_close[sym_b].iloc[0]
+
     # Calculate formation period statistics (STATIC - per GGR paper)
     formation_spread = calculate_spread(
         formation_close[sym_a],
         formation_close[sym_b],
         normalize=True,
+        baseline_a=formation_baseline_a,
+        baseline_b=formation_baseline_b,
     )
     formation_stats = calculate_formation_stats(formation_spread)
     formation_std = formation_stats['std']
@@ -147,11 +154,14 @@ def run_backtest_single_pair(
             pair=pair,
         )
 
-    # Calculate trading period spread (normalized from START of trading period)
+    # Calculate trading period spread using SAME baseline as formation period
+    # This is critical: the static σ from formation must apply to a consistently-scaled spread
     trading_spread = calculate_spread(
         trading_close[sym_a],
         trading_close[sym_b],
         normalize=True,
+        baseline_a=formation_baseline_a,
+        baseline_b=formation_baseline_b,
     )
 
     # Calculate distance using STATIC formation σ
@@ -375,12 +385,16 @@ def run_backtest_single_pair(
                     entry_price_b = close_b_arr[i]
                     entry_date = current_date
                     entry_idx = i
+                    # Record distance at actual entry index
+                    entry_distance = current_distance
                 else:
                     # Next-day execution at OPEN (default)
                     entry_price_a = open_a_arr[i + 1]
                     entry_price_b = open_b_arr[i + 1]
                     entry_date = next_date
                     entry_idx = i + 1
+                    # Record distance at actual entry index (next day), not signal day
+                    entry_distance = distance_arr[i + 1]
 
                 # Skip entry if prices are NaN, zero, or negative (data error)
                 if (pd.isna(entry_price_a) or pd.isna(entry_price_b) or
@@ -405,9 +419,9 @@ def run_backtest_single_pair(
                     "entry_price_b": entry_price_b,
                     "shares_a": shares_a,
                     "shares_b": shares_b,
-                    "entry_distance": current_distance,
+                    "entry_distance": entry_distance,
                     "entry_commission": commission,
-                    "max_adverse_distance": current_distance,  # Track MAE
+                    "max_adverse_distance": entry_distance,  # Track MAE from actual entry
                 }
                 position_entry_idx = entry_idx
 

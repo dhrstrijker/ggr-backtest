@@ -78,11 +78,13 @@ def calculate_metrics(
     else:
         sharpe = 0
 
-    # Max drawdown
+    # Max drawdown - compute percentage directly for robustness with NaN values
     rolling_max = equity_curve.expanding().max()
     drawdown = equity_curve - rolling_max
     max_drawdown = drawdown.min()
-    max_drawdown_pct = (max_drawdown / rolling_max[drawdown.idxmin()]) if max_drawdown < 0 else 0
+    # Compute drawdown percentage directly instead of using idxmin() lookup
+    drawdown_pct = (equity_curve - rolling_max) / rolling_max
+    max_drawdown_pct = drawdown_pct.min() if max_drawdown < 0 else 0
 
     # Average holding period
     avg_holding_days = np.mean([t.holding_days for t in trades])
@@ -1191,11 +1193,12 @@ def calculate_staggered_metrics(
     annualized_return = (1 + avg_monthly_return) ** 12 - 1
     annualized_volatility = monthly_std * np.sqrt(12)
 
-    # Sharpe ratio (annualized)
+    # Sharpe ratio (annualized) - use std of excess returns, not original returns
     monthly_rf = risk_free_rate / 12
     excess_returns = monthly_returns - monthly_rf
-    if monthly_std > 0:
-        sharpe = np.sqrt(12) * excess_returns.mean() / monthly_std
+    excess_std = excess_returns.std()
+    if excess_std > 0:
+        sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
     else:
         sharpe = 0
 
@@ -1521,9 +1524,12 @@ def calculate_ggr_dollar_metrics(
         monthly_pnl / capital_fully_invested if capital_fully_invested > 0 else monthly_pnl
     )
 
-    # Sharpe ratio (annualized) - no risk-free rate for dollar-neutral long-short
-    if len(monthly_returns) > 1 and monthly_returns.std() > 0:
-        sharpe = np.sqrt(12) * monthly_returns.mean() / monthly_returns.std()
+    # Sharpe ratio (annualized) - use risk-free rate for consistency with other metrics
+    monthly_rf = risk_free_rate / 12
+    excess_returns = monthly_returns - monthly_rf
+    excess_std = excess_returns.std()
+    if len(excess_returns) > 1 and excess_std > 0:
+        sharpe = np.sqrt(12) * excess_returns.mean() / excess_std
     else:
         sharpe = 0
 

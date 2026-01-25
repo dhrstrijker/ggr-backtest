@@ -847,9 +847,10 @@ class TestCalculateStaggeredMetrics:
         """Sharpe ratio should be calculated correctly from monthly returns."""
         from src.analysis import calculate_staggered_metrics
 
-        # Create returns with known values
+        # Create returns with variance (realistic scenario with positive average)
+        # Average: ~4.33%, Std: ~2.87%
         monthly_returns = pd.Series(
-            [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
+            [0.06, 0.04, 0.05, 0.03, 0.07, 0.02, 0.05, 0.04, 0.06, 0.03, 0.04, 0.05],
             index=pd.date_range("2021-01-31", periods=12, freq="ME"),
         )
         cumulative_returns = (1 + monthly_returns).cumprod() - 1
@@ -862,9 +863,9 @@ class TestCalculateStaggeredMetrics:
         # With 2% annual risk-free rate = 0.167% monthly
         metrics = calculate_staggered_metrics(mock_result, risk_free_rate=0.02)
 
-        # Sharpe ratio should be positive for consistent positive returns
+        # Sharpe ratio should be positive for net positive excess returns with variance
         assert metrics["sharpe_ratio"] > 0, \
-            f"Sharpe should be positive for consistent gains, got {metrics['sharpe_ratio']}"
+            f"Sharpe should be positive for positive excess returns, got {metrics['sharpe_ratio']}"
 
     def test_max_drawdown_calculation(self):
         """Max drawdown should be calculated correctly."""
