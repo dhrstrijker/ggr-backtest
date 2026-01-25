@@ -1516,15 +1516,11 @@ def calculate_ggr_dollar_metrics(
         ann_return_fully_invested = 0
         ann_return_committed = 0
 
-    # Monthly P&L for Sharpe ratio calculation
-    # Use capital_fully_invested (capital in pairs that actually traded)
-    # instead of capital_committed (all allocated capital)
-    monthly_pnl = calculate_monthly_pnl_series(all_trades)
-    monthly_returns = (
-        monthly_pnl / capital_fully_invested if capital_fully_invested > 0 else monthly_pnl
-    )
-
-    # Sharpe ratio (annualized) - use risk-free rate for consistency with other metrics
+    # Sharpe ratio (annualized) - use the properly calculated monthly returns
+    # from the staggered portfolio methodology, not P&L-based returns.
+    # The result.monthly_returns is averaged across active portfolios and represents
+    # true portfolio performance, while P&L-based returns measure exit timing.
+    monthly_returns = result.monthly_returns.dropna()
     monthly_rf = risk_free_rate / 12
     excess_returns = monthly_returns - monthly_rf
     excess_std = excess_returns.std()

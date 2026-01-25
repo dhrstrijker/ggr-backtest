@@ -363,11 +363,20 @@ class MockStaggeredResult:
         trades: list[Trade],
         avg_active: float = 5.0,
         total_portfolios: int = 40,
+        monthly_returns: pd.Series = None,
     ):
         self.all_trades = trades
         self.total_portfolios = total_portfolios
         # Create a Series that returns avg_active when .mean() is called
         self.active_portfolios_over_time = pd.Series([avg_active] * 100)
+        # Monthly returns for Sharpe calculation - default to small positive returns
+        if monthly_returns is None:
+            self.monthly_returns = pd.Series(
+                [0.01, 0.02, -0.005, 0.015, 0.01],
+                index=pd.date_range("2023-01-31", periods=5, freq="ME"),
+            )
+        else:
+            self.monthly_returns = monthly_returns
 
 
 class TestCalculateMonthlyPnlSeries:
