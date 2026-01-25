@@ -254,14 +254,27 @@ def register_pair_inspector_callbacks(app, data_store):
         # 1. Get formation period data and calculate STATIC formation σ
         formation_close_a = data_store.close_prices[sym_a].loc[cycle.formation_start:cycle.formation_end]
         formation_close_b = data_store.close_prices[sym_b].loc[cycle.formation_start:cycle.formation_end]
-        formation_spread = calculate_spread(formation_close_a, formation_close_b, normalize=True)
+
+        # Get formation baselines (same as backtest uses)
+        formation_baseline_a = formation_close_a.iloc[0]
+        formation_baseline_b = formation_close_b.iloc[0]
+
+        formation_spread = calculate_spread(
+            formation_close_a, formation_close_b, normalize=True,
+            baseline_a=formation_baseline_a, baseline_b=formation_baseline_b
+        )
         formation_stats = calculate_formation_stats(formation_spread)
         formation_std = formation_stats['std']
 
         # 2. Get trading period data and calculate distance using STATIC σ
         trading_close_a = data_store.close_prices[sym_a].loc[cycle.trading_start:cycle.trading_end]
         trading_close_b = data_store.close_prices[sym_b].loc[cycle.trading_start:cycle.trading_end]
-        trading_spread = calculate_spread(trading_close_a, trading_close_b, normalize=True)
+
+        # Use FORMATION baseline for trading spread (matches backtest)
+        trading_spread = calculate_spread(
+            trading_close_a, trading_close_b, normalize=True,
+            baseline_a=formation_baseline_a, baseline_b=formation_baseline_b
+        )
         distance = calculate_distance(trading_spread, formation_std)
 
         # Get trades for this pair in this cycle
