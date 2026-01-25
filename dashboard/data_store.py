@@ -54,8 +54,13 @@ class DataStore:
     ggr_metrics_wait_0: dict = field(default=None)
     ggr_metrics_wait_1: dict = field(default=None)
 
-    # Aggregated pair statistics (across all cycles)
-    pair_stats: dict = field(default_factory=dict)
+    # Aggregated pair statistics (across all cycles) - separate for each wait mode
+    pair_stats_wait_0: dict = field(default_factory=dict)
+    pair_stats_wait_1: dict = field(default_factory=dict)
+
+    # Initialization status flag
+    _initialized: bool = field(default=False)
+    _initialization_error: str = field(default=None)
 
     def load_or_compute(self, config: dict) -> None:
         """
@@ -65,30 +70,40 @@ class DataStore:
             config: Configuration dict loaded from configs/sectors/*.json
         """
         self.config = config
+        self._initialized = False
+        self._initialization_error = None
 
-        print("=" * 60)
-        print("GGR Staggered Portfolio Methodology")
-        print("Loading data and computing backtest results...")
-        print("=" * 60)
+        try:
+            print("=" * 60)
+            print("GGR Staggered Portfolio Methodology")
+            print("Loading data and computing backtest results...")
+            print("=" * 60)
 
-        # Step 1: Fetch price data
-        self._load_price_data()
+            # Step 1: Fetch price data
+            self._load_price_data()
 
-        # Step 2: Run staggered backtests for both wait modes
-        self._run_staggered_backtests()
+            # Step 2: Run staggered backtests for both wait modes
+            self._run_staggered_backtests()
 
-        # Step 3: Aggregate pair statistics
-        self._aggregate_pair_stats()
+            # Step 3: Aggregate pair statistics for both wait modes
+            self._aggregate_pair_stats()
 
-        result = self.staggered_result_wait_1
-        print("=" * 60)
-        print("Data loading complete!")
-        print(f"  - Portfolio cycles: {result.total_portfolios}")
-        print(f"  - Avg active portfolios: {result.active_portfolios_over_time.mean():.1f}")
-        print(f"  - Total months: {len(result.monthly_returns)}")
-        print(f"  - Wait-1 trades: {len(result.all_trades)}")
-        print(f"  - Wait-0 trades: {len(self.staggered_result_wait_0.all_trades)}")
-        print("=" * 60)
+            result = self.staggered_result_wait_1
+            print("=" * 60)
+            print("Data loading complete!")
+            print(f"  - Portfolio cycles: {result.total_portfolios}")
+            print(f"  - Avg active portfolios: {result.active_portfolios_over_time.mean():.1f}")
+            print(f"  - Total months: {len(result.monthly_returns)}")
+            print(f"  - Wait-1 trades: {len(result.all_trades)}")
+            print(f"  - Wait-0 trades: {len(self.staggered_result_wait_0.all_trades)}")
+            print("=" * 60)
+
+            self._initialized = True
+
+        except Exception as e:
+            self._initialization_error = str(e)
+            print(f"ERROR: Data initialization failed: {e}")
+            raise
 
     def _load_price_data(self) -> None:
         """Load price data from Polygon.io or cache."""
@@ -204,39 +219,46 @@ class DataStore:
         )
 
     def _aggregate_pair_stats(self) -> None:
-        """Aggregate statistics for each pair across all cycles."""
+        """Aggregate statistics for each pair across all cycles for both wait modes."""
         print("\n[3/3] Aggregating pair statistics...")
 
-        result = self.staggered_result_wait_1
+        # Aggregate for both wait modes
+        for wait_mode in [0, 1]:
+            result = self.staggered_result_wait_0 if wait_mode == 0 else self.staggered_result_wait_1
+            pair_stats = self.pair_stats_wait_0 if wait_mode == 0 else self.pair_stats_wait_1
 
-        # Collect all pairs that appear in any cycle
-        all_pairs = set()
-        for cycle in result.cycles:
-            if cycle.pairs:
-                all_pairs.update(cycle.pairs)
+            # Collect all pairs that appear in any cycle
+            all_pairs = set()
+            for cycle in result.cycles:
+                if cycle.pairs:
+                    all_pairs.update(cycle.pairs)
 
-        # Aggregate stats for each pair
-        for pair in all_pairs:
-            pair_trades = [t for t in result.all_trades if t.pair == pair]
-            cycles_with_pair = sum(1 for c in result.cycles if c.pairs and pair in c.pairs)
+            # Aggregate stats for each pair
+            for pair in all_pairs:
+                pair_trades = [t for t in result.all_trades if t.pair == pair]
+                cycles_with_pair = sum(1 for c in result.cycles if c.pairs and pair in c.pairs)
 
-            if pair_trades:
-                total_pnl = sum(t.pnl for t in pair_trades)
-                wins = [t for t in pair_trades if t.pnl > 0]
-                win_rate = len(wins) / len(pair_trades) if pair_trades else 0
-            else:
-                total_pnl = 0
-                win_rate = 0
+                if pair_trades:
+                    total_pnl = sum(t.pnl for t in pair_trades)
+                    wins = [t for t in pair_trades if t.pnl > 0]
+                    losses = [t for t in pair_trades if t.pnl < 0]
+                    # Win rate excludes break-even trades (matching src/analysis.py)
+                    decided_trades = len(wins) + len(losses)
+                    win_rate = (len(wins) / decided_trades * 100) if decided_trades > 0 else 0
+                else:
+                    total_pnl = 0
+                    win_rate = 0
 
-            self.pair_stats[pair] = {
-                "pair": pair,
-                "cycles_traded": cycles_with_pair,
-                "total_trades": len(pair_trades),
-                "total_pnl": total_pnl,
-                "win_rate": win_rate,
-            }
+                pair_stats[pair] = {
+                    "pair": pair,
+                    "cycles_traded": cycles_with_pair,
+                    "total_trades": len(pair_trades),
+                    "total_pnl": total_pnl,
+                    "win_rate": win_rate,  # Stored as percentage (e.g., 66.7)
+                }
 
-        print(f"  Aggregated stats for {len(self.pair_stats)} unique pairs")
+        print(f"  Aggregated stats for {len(self.pair_stats_wait_1)} unique pairs (Wait-1)")
+        print(f"  Aggregated stats for {len(self.pair_stats_wait_0)} unique pairs (Wait-0)")
 
     # -------------------------------------------------------------------------
     # Helper methods for dashboard
@@ -274,14 +296,17 @@ class DataStore:
         result = self.get_staggered_result(wait_mode)
         return result.active_portfolios_over_time if result else pd.Series()
 
-    def get_spy_returns(self) -> pd.Series:
+    def get_spy_returns(self, wait_mode: int = 1) -> pd.Series:
         """
         Get SPY returns aligned to the backtest period.
+
+        Args:
+            wait_mode: Which wait mode to use for alignment (0 or 1)
 
         Returns:
             Series of SPY cumulative returns (as decimal, e.g., 0.10 = 10%)
         """
-        result = self.staggered_result_wait_1
+        result = self.get_staggered_result(wait_mode)
         if not result or result.monthly_returns is None:
             return pd.Series()
 
@@ -300,7 +325,17 @@ class DataStore:
         return returns
 
     def get_monthly_pnl(self, wait_mode: int = 1) -> pd.Series:
-        """Get monthly P&L in dollars (not percentage returns)."""
+        """Get monthly P&L in dollars.
+
+        Note: Aggregates by EXIT month (when P&L is realized), not entry month.
+        This is standard for realized P&L reporting.
+
+        Args:
+            wait_mode: Which wait mode to use (0 or 1)
+
+        Returns:
+            Series of monthly P&L values indexed by month
+        """
         trades = self.get_all_trades(wait_mode)
         return calculate_monthly_pnl_series(trades)
 
@@ -314,15 +349,44 @@ class DataStore:
         all_trades = self.get_all_trades(wait_mode)
         return [t for t in all_trades if t.pair == pair]
 
-    def get_pair_stats_list(self) -> list[dict]:
-        """Get list of pair statistics sorted by total P&L."""
-        stats_list = list(self.pair_stats.values())
+    def get_pair_stats(self, pair: tuple, wait_mode: int = 1) -> dict:
+        """Get statistics for a specific pair.
+
+        Args:
+            pair: Tuple of (symbol_a, symbol_b)
+            wait_mode: Which wait mode to use (0 or 1)
+
+        Returns:
+            Dict with pair statistics or empty dict if not found
+        """
+        pair_stats = self.pair_stats_wait_1 if wait_mode == 1 else self.pair_stats_wait_0
+        return pair_stats.get(pair, {})
+
+    def get_pair_stats_list(self, wait_mode: int = 1) -> list[dict]:
+        """Get list of pair statistics sorted by total P&L.
+
+        Args:
+            wait_mode: Which wait mode to use (0 or 1)
+
+        Returns:
+            List of pair statistics dicts sorted by total P&L
+        """
+        pair_stats = self.pair_stats_wait_1 if wait_mode == 1 else self.pair_stats_wait_0
+        stats_list = list(pair_stats.values())
         stats_list.sort(key=lambda x: x["total_pnl"], reverse=True)
         return stats_list
 
-    def get_all_pairs(self) -> list[tuple]:
-        """Get all unique pairs that appear in any cycle."""
-        return list(self.pair_stats.keys())
+    def get_all_pairs(self, wait_mode: int = 1) -> list[tuple]:
+        """Get all unique pairs that appear in any cycle.
+
+        Args:
+            wait_mode: Which wait mode to use (0 or 1)
+
+        Returns:
+            List of pair tuples
+        """
+        pair_stats = self.pair_stats_wait_1 if wait_mode == 1 else self.pair_stats_wait_0
+        return list(pair_stats.keys())
 
     def get_cycles_for_pair(self, pair: tuple, wait_mode: int = 1) -> list:
         """Get list of cycle IDs where this pair was traded."""
@@ -355,3 +419,24 @@ class DataStore:
             "sharpe_ratio": metrics.get("sharpe_ratio", 0),
             "max_drawdown": metrics.get("max_drawdown", 0),
         }
+
+    def is_initialized(self) -> bool:
+        """Check if all required data is loaded.
+
+        Returns:
+            True if data store is fully initialized, False otherwise
+        """
+        return (
+            self._initialized and
+            self.close_prices is not None and
+            self.staggered_result_wait_0 is not None and
+            self.staggered_result_wait_1 is not None
+        )
+
+    def get_initialization_error(self) -> str | None:
+        """Get any initialization error message.
+
+        Returns:
+            Error message string or None if no error
+        """
+        return self._initialization_error

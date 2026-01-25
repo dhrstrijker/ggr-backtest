@@ -3,6 +3,7 @@
 from dash import html, callback, Input, Output
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
+import pandas as pd
 
 from ..components.metrics_card import format_currency, format_percentage, format_with_color
 
@@ -58,7 +59,7 @@ def register_fund_overview_callbacks(app, data_store):
         mode_indicator = html.Div([
             dbc.Badge(mode_text, color="primary", className="me-2"),
             dbc.Badge(f"{total_cycles} Portfolio Cycles", color="info", className="me-2"),
-            dbc.Badge(f"{len(data_store.get_all_pairs())} Unique Pairs", color="secondary"),
+            dbc.Badge(f"{len(data_store.get_all_pairs(wait_mode))} Unique Pairs", color="secondary"),
         ])
 
         return pnl_display, ann_return_display, sharpe_display, max_dd_display, win_rate_display, trades_display, mode_indicator
@@ -74,7 +75,12 @@ def register_fund_overview_callbacks(app, data_store):
         fig = go.Figure()
 
         if len(cumulative_pnl) > 0:
-            pnl_color = "#2E86AB" if cumulative_pnl.iloc[-1] >= 0 else "#E94F37"
+            # Handle potential NaN in final value
+            final_pnl = cumulative_pnl.iloc[-1]
+            if pd.isna(final_pnl):
+                final_pnl = 0
+            pnl_color = "#2E86AB" if final_pnl >= 0 else "#E94F37"
+            fill_color = "rgba(233, 79, 55, 0.1)" if final_pnl < 0 else "rgba(46, 134, 171, 0.1)"
             fig.add_trace(
                 go.Scatter(
                     x=cumulative_pnl.index,
@@ -83,7 +89,7 @@ def register_fund_overview_callbacks(app, data_store):
                     name="Cumulative P&L",
                     line=dict(color=pnl_color, width=2.5),
                     fill="tozeroy",
-                    fillcolor=f"rgba(233, 79, 55, 0.1)" if cumulative_pnl.iloc[-1] < 0 else "rgba(46, 134, 171, 0.1)",
+                    fillcolor=fill_color,
                     hovertemplate="Date: %{x}<br>P&L: $%{y:,.0f}<extra></extra>",
                 ),
             )

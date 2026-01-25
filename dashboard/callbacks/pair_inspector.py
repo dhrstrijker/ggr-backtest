@@ -1,4 +1,4 @@
-"""Callbacks for Page 3: Pair Inspector (Staggered Methodology)."""
+"""Callbacks for Page 2: Pair Inspector (Staggered Methodology)."""
 
 from urllib.parse import parse_qs
 
@@ -243,8 +243,11 @@ def register_pair_inspector_callbacks(app, data_store):
         if not cycle or not cycle.pairs or pair not in cycle.pairs:
             return go.Figure()
 
-        # Get entry threshold from config
-        entry_threshold = data_store.config.get("entry_threshold", 2.0)
+        # Get entry threshold from config with validation
+        entry_threshold = data_store.config.get("entry_threshold")
+        if entry_threshold is None:
+            entry_threshold = 2.0
+            print("Warning: entry_threshold not in config, using default 2.0")
 
         # Check symbols exist
         if sym_a not in data_store.close_prices.columns or sym_b not in data_store.close_prices.columns:
@@ -265,6 +268,23 @@ def register_pair_inspector_callbacks(app, data_store):
         )
         formation_stats = calculate_formation_stats(formation_spread)
         formation_std = formation_stats['std']
+
+        # Validate formation std - NaN or zero would cause issues
+        if pd.isna(formation_std) or formation_std == 0:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Insufficient formation data to calculate spread distance",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                showarrow=False,
+                font=dict(size=14, color="gray"),
+            )
+            fig.update_layout(
+                template="plotly_white",
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+            )
+            return fig
 
         # 2. Get trading period data and calculate distance using STATIC σ
         trading_close_a = data_store.close_prices[sym_a].loc[cycle.trading_start:cycle.trading_end]
@@ -343,19 +363,26 @@ def register_pair_inspector_callbacks(app, data_store):
                 hovertemplate=f"<b>ENTRY</b><br>{trade.entry_date.strftime('%Y-%m-%d')}<br>Distance: {trade.entry_distance:.2f}σ<extra></extra>",
             ))
 
-            # Exit marker
+            # Exit marker - use star for delisting exits (distance fallback)
+            if trade.exit_reason == 'delisting':
+                exit_symbol = "star"
+                hover_note = "<br>(distance at last valid price)"
+            else:
+                exit_symbol = "x"
+                hover_note = ""
+
             fig.add_trace(go.Scatter(
                 x=[trade.exit_date],
                 y=[trade.exit_distance],
                 mode="markers",
                 marker=dict(
-                    symbol="x",
+                    symbol=exit_symbol,
                     size=10,
                     color=marker_color,
                     line=dict(width=2),
                 ),
                 showlegend=False,
-                hovertemplate=f"<b>EXIT</b><br>{trade.exit_date.strftime('%Y-%m-%d')}<br>Distance: {trade.exit_distance:.2f}σ<extra></extra>",
+                hovertemplate=f"<b>EXIT ({trade.exit_reason})</b><br>{trade.exit_date.strftime('%Y-%m-%d')}<br>Distance: {trade.exit_distance:.2f}σ{hover_note}<extra></extra>",
             ))
 
         # Layout with info about formation σ
@@ -391,9 +418,6 @@ def register_pair_inspector_callbacks(app, data_store):
         sym_a, sym_b = pair_value.split("_")
         pair = (sym_a, sym_b)
 
-        # Get aggregated pair stats
-        pair_stats = data_store.pair_stats.get(pair, {})
-
         # Get trades for this pair
         trades = data_store.get_trades_for_pair(pair, wait_mode)
 
@@ -403,7 +427,10 @@ def register_pair_inspector_callbacks(app, data_store):
         # Calculate pair-specific metrics
         total_pnl = sum(t.pnl for t in trades)
         win_count = sum(1 for t in trades if t.pnl > 0)
-        win_rate = (win_count / len(trades) * 100) if trades else 0
+        loss_count = sum(1 for t in trades if t.pnl < 0)
+        # Win rate excludes break-even trades (matching src/analysis.py)
+        decided_trades = win_count + loss_count
+        win_rate = (win_count / decided_trades * 100) if decided_trades > 0 else 0
         avg_holding = sum(t.holding_days for t in trades) / len(trades) if trades else 0
 
         return html.Div([

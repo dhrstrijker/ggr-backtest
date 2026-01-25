@@ -1,4 +1,4 @@
-"""Page 3: Pair Inspector layout."""
+"""Page 2: Pair Inspector layout."""
 
 from dash import html, dcc
 import dash_bootstrap_components as dbc

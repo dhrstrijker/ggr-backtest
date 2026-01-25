@@ -24,8 +24,6 @@ def create_base_layout(data_store) -> html.Div:
 
         # Stores for global state
         dcc.Store(id="wait-mode-store", data=1),  # Default Wait-1-Day
-        dcc.Store(id="return-calc-store", data="committed"),
-        dcc.Store(id="selected-pair-store", data=None),  # For pair selection from summary
 
         # Navigation bar
         dbc.Navbar(

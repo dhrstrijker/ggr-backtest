@@ -1,4 +1,4 @@
-"""Page 4: Pairs Summary layout (Staggered Methodology)."""
+"""Page 3: Pairs Summary layout (Staggered Methodology)."""
 
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc

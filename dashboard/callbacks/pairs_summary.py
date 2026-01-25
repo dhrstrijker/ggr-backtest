@@ -1,4 +1,4 @@
-"""Callbacks for Page 4: Pairs Summary (Staggered Methodology)."""
+"""Callbacks for Page 3: Pairs Summary (Staggered Methodology)."""
 
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
@@ -15,8 +15,8 @@ def register_pairs_summary_callbacks(app, data_store):
     )
     def update_pairs_table(wait_mode):
         """Build the pairs summary table showing all pairs across all cycles."""
-        # Get all unique pairs from all cycles
-        all_pairs = data_store.get_all_pairs()
+        # Get all unique pairs from all cycles for the current wait mode
+        all_pairs = data_store.get_all_pairs(wait_mode)
 
         if not all_pairs:
             return html.P("No pairs found in backtest results", className="text-muted")
@@ -30,7 +30,10 @@ def register_pairs_summary_callbacks(app, data_store):
             total_pnl = sum(t.pnl for t in trades)
             num_trades = len(trades)
             win_count = sum(1 for t in trades if t.pnl > 0)
-            win_rate = (win_count / num_trades * 100) if num_trades > 0 else 0
+            loss_count = sum(1 for t in trades if t.pnl < 0)
+            # Win rate excludes break-even trades (matching src/analysis.py)
+            decided_trades = win_count + loss_count
+            win_rate = (win_count / decided_trades * 100) if decided_trades > 0 else 0
             avg_pnl = total_pnl / num_trades if num_trades > 0 else 0
             avg_holding = sum(t.holding_days for t in trades) / num_trades if num_trades > 0 else 0
 

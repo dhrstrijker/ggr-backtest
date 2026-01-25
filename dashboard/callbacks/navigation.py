@@ -4,8 +4,8 @@ from dash import html, callback, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
 from ..layouts.page1_fund_overview import create_fund_overview_layout
-from ..layouts.page3_pair_inspector import create_pair_inspector_layout
-from ..layouts.page4_pairs_summary import create_pairs_summary_layout
+from ..layouts.page2_pair_inspector import create_pair_inspector_layout
+from ..layouts.page3_pairs_summary import create_pairs_summary_layout
 
 
 def register_navigation_callbacks(app, data_store):
