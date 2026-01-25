@@ -21,6 +21,7 @@ from tests.fixtures.known_outcomes import (
 )
 
 
+@pytest.mark.integration
 class TestEndToEndBacktest:
     """End-to-end backtest integration tests."""
 
@@ -213,6 +214,7 @@ class TestEndToEndBacktest:
         assert result.equity_curve.iloc[0] == capital
 
 
+@pytest.mark.integration
 class TestMetricsIntegration:
     """Integration tests for metrics calculation."""
 
@@ -297,6 +299,7 @@ class TestMetricsIntegration:
         assert not any(pd.isna(v) for v in metrics.values() if isinstance(v, (int, float)))
 
 
+@pytest.mark.integration
 class TestCombineResultsIntegration:
     """Integration tests for combining multiple pair results."""
 
@@ -348,6 +351,7 @@ class TestCombineResultsIntegration:
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestFullPipeline:
     """Tests for complete data → normalize → SSD → pairs → backtest → metrics pipeline."""
 
@@ -429,6 +433,7 @@ class TestFullPipeline:
             assert isinstance(metrics["total_trades"], int)
             assert not np.isnan(metrics["sharpe_ratio"])
 
+    @pytest.mark.slow
     def test_staggered_multiple_cycles_complete(self):
         """Test: full staggered backtest with 3+ cycles."""
         from src.staggered import run_staggered_backtest, StaggeredConfig
@@ -548,6 +553,7 @@ class TestFullPipeline:
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestDataQualityIntegration:
     """Integration tests for data quality handling."""
 

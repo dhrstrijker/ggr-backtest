@@ -4,9 +4,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import sys
-sys.path.insert(0, str(pd.io.common.Path(__file__).parent.parent))
-
 from src.pairs import (
     normalize_prices,
     calculate_ssd,

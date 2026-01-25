@@ -5,9 +5,6 @@ import pandas as pd
 import pytest
 from datetime import datetime
 
-import sys
-sys.path.insert(0, str(pd.io.common.Path(__file__).parent.parent))
-
 from src.backtest import (
     run_backtest_single_pair,
     BacktestConfig,

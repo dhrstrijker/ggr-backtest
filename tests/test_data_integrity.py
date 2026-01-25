@@ -7,9 +7,6 @@ import pandas as pd
 import pytest
 from datetime import timedelta
 
-import sys
-sys.path.insert(0, str(pd.io.common.Path(__file__).parent.parent))
-
 from src.data import validate_price_data, find_data_gaps, get_trading_days_coverage
 
 

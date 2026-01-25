@@ -1,7 +1,9 @@
-"""Tests for src/analysis.py - Performance metrics and analysis functions."""
+"""Tests for src/analysis.py - Performance metrics and analysis functions.
+
+Note: Uses trade_factory fixture from conftest.py for creating Trade objects.
+"""
 
 from datetime import datetime
-from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -15,35 +17,6 @@ from src.analysis import (
     calculate_cumulative_pnl_series,
 )
 from src.backtest import Trade
-
-
-def create_trade(
-    pnl: float,
-    direction: int = 1,
-    holding_days: int = 10,
-    pair: tuple[str, str] = ("A", "B"),
-) -> Trade:
-    """Helper to create a Trade object for testing."""
-    entry_date = datetime(2024, 1, 1)
-    return Trade(
-        pair=pair,
-        direction=direction,
-        entry_date=entry_date,
-        exit_date=entry_date + timedelta(days=holding_days),
-        entry_price_a=100.0,
-        entry_price_b=100.0,
-        exit_price_a=100.0 + (pnl / 2 if direction == 1 else -pnl / 2),
-        exit_price_b=100.0 - (pnl / 2 if direction == 1 else pnl / 2),
-        shares_a=50.0,
-        shares_b=50.0,
-        pnl=pnl,
-        pnl_pct=pnl / 10000,
-        holding_days=holding_days,
-        entry_distance=2.5,
-        exit_distance=0.1,
-        exit_reason="crossing",
-        max_adverse_spread=2.5,  # Same as entry for simple test trades
-    )
 
 
 class TestCalculateMetrics:
@@ -60,9 +33,9 @@ class TestCalculateMetrics:
         assert metrics["sharpe_ratio"] == 0
         assert metrics["max_drawdown"] == 0
 
-    def test_single_winning_trade(self):
+    def test_single_winning_trade(self, trade_factory):
         """Single winning trade should have 100% win rate."""
-        trades = [create_trade(pnl=500.0)]
+        trades = [trade_factory(pnl=500.0)]
         equity = pd.Series(
             [10000.0, 10500.0],
             index=[datetime(2024, 1, 1), datetime(2024, 1, 11)],
@@ -76,9 +49,9 @@ class TestCalculateMetrics:
         assert metrics["avg_win"] == 500.0
         assert metrics["avg_loss"] == 0
 
-    def test_single_losing_trade(self):
+    def test_single_losing_trade(self, trade_factory):
         """Single losing trade should have 0% win rate."""
-        trades = [create_trade(pnl=-300.0)]
+        trades = [trade_factory(pnl=-300.0)]
         equity = pd.Series(
             [10000.0, 9700.0],
             index=[datetime(2024, 1, 1), datetime(2024, 1, 11)],
@@ -92,12 +65,12 @@ class TestCalculateMetrics:
         assert metrics["avg_win"] == 0
         assert metrics["avg_loss"] == 300.0
 
-    def test_all_winners_100_percent_win_rate(self):
+    def test_all_winners_100_percent_win_rate(self, trade_factory):
         """All winning trades should yield 100% win rate."""
         trades = [
-            create_trade(pnl=100.0),
-            create_trade(pnl=200.0),
-            create_trade(pnl=50.0),
+            trade_factory(pnl=100.0),
+            trade_factory(pnl=200.0),
+            trade_factory(pnl=50.0),
         ]
         equity = pd.Series(
             [10000.0, 10100.0, 10300.0, 10350.0],
@@ -110,12 +83,12 @@ class TestCalculateMetrics:
         assert metrics["win_rate"] == 1.0
         assert metrics["total_return"] == 350.0
 
-    def test_all_losers_zero_win_rate(self):
+    def test_all_losers_zero_win_rate(self, trade_factory):
         """All losing trades should yield 0% win rate."""
         trades = [
-            create_trade(pnl=-100.0),
-            create_trade(pnl=-200.0),
-            create_trade(pnl=-50.0),
+            trade_factory(pnl=-100.0),
+            trade_factory(pnl=-200.0),
+            trade_factory(pnl=-50.0),
         ]
         equity = pd.Series(
             [10000.0, 9900.0, 9700.0, 9650.0],
@@ -128,14 +101,14 @@ class TestCalculateMetrics:
         assert metrics["win_rate"] == 0.0
         assert metrics["total_return"] == -350.0
 
-    def test_mixed_trades_correct_win_rate(self):
+    def test_mixed_trades_correct_win_rate(self, trade_factory):
         """Mixed wins and losses should calculate correct win rate."""
         trades = [
-            create_trade(pnl=100.0),   # Win
-            create_trade(pnl=-50.0),   # Loss
-            create_trade(pnl=200.0),   # Win
-            create_trade(pnl=-100.0),  # Loss
-            create_trade(pnl=150.0),   # Win
+            trade_factory(pnl=100.0),   # Win
+            trade_factory(pnl=-50.0),   # Loss
+            trade_factory(pnl=200.0),   # Win
+            trade_factory(pnl=-100.0),  # Loss
+            trade_factory(pnl=150.0),   # Win
         ]
         equity = pd.Series(
             [10000.0, 10100.0, 10050.0, 10250.0, 10150.0, 10300.0],
@@ -147,12 +120,12 @@ class TestCalculateMetrics:
         assert metrics["total_trades"] == 5
         assert metrics["win_rate"] == 0.6  # 3 wins out of 5
 
-    def test_profit_factor_calculation(self):
+    def test_profit_factor_calculation(self, trade_factory):
         """Profit factor should be gross profit / gross loss."""
         trades = [
-            create_trade(pnl=300.0),   # Win
-            create_trade(pnl=-100.0),  # Loss
-            create_trade(pnl=200.0),   # Win
+            trade_factory(pnl=300.0),   # Win
+            trade_factory(pnl=-100.0),  # Loss
+            trade_factory(pnl=200.0),   # Win
         ]
         equity = pd.Series(
             [10000.0, 10300.0, 10200.0, 10400.0],
@@ -166,7 +139,7 @@ class TestCalculateMetrics:
         # Profit factor = 500 / 100 = 5.0
         assert metrics["profit_factor"] == 5.0
 
-    def test_max_drawdown_calculation(self):
+    def test_max_drawdown_calculation(self, trade_factory):
         """Max drawdown should correctly identify largest peak-to-trough decline."""
         # Equity: 10000 -> 10500 -> 10200 -> 10800 -> 10100
         # Drawdown from 10500 peak: -300 (to 10200)
@@ -175,19 +148,19 @@ class TestCalculateMetrics:
             [10000.0, 10500.0, 10200.0, 10800.0, 10100.0],
             index=pd.date_range("2024-01-01", periods=5),
         )
-        trades = [create_trade(pnl=100.0)]  # Dummy trade
+        trades = [trade_factory(pnl=100.0)]  # Dummy trade
 
         metrics = calculate_metrics(trades, equity)
 
         assert metrics["max_drawdown"] == -700.0
         assert pytest.approx(metrics["max_drawdown_pct"], rel=0.01) == -700.0 / 10800.0
 
-    def test_avg_holding_days(self):
+    def test_avg_holding_days(self, trade_factory):
         """Average holding days should be mean of all trade holding periods."""
         trades = [
-            create_trade(pnl=100.0, holding_days=5),
-            create_trade(pnl=200.0, holding_days=10),
-            create_trade(pnl=-50.0, holding_days=15),
+            trade_factory(pnl=100.0, holding_days=5),
+            trade_factory(pnl=200.0, holding_days=10),
+            trade_factory(pnl=-50.0, holding_days=15),
         ]
         equity = pd.Series(
             [10000.0, 10250.0],
@@ -198,14 +171,14 @@ class TestCalculateMetrics:
 
         assert metrics["avg_holding_days"] == 10.0  # (5 + 10 + 15) / 3
 
-    def test_long_short_breakdown(self):
+    def test_long_short_breakdown(self, trade_factory):
         """Should correctly count and calculate win rates by direction."""
         trades = [
-            create_trade(pnl=100.0, direction=1),   # Long win
-            create_trade(pnl=-50.0, direction=1),   # Long loss
-            create_trade(pnl=200.0, direction=-1),  # Short win
-            create_trade(pnl=-100.0, direction=-1), # Short loss
-            create_trade(pnl=150.0, direction=-1),  # Short win
+            trade_factory(pnl=100.0, direction=1),   # Long win
+            trade_factory(pnl=-50.0, direction=1),   # Long loss
+            trade_factory(pnl=200.0, direction=-1),  # Short win
+            trade_factory(pnl=-100.0, direction=-1), # Short loss
+            trade_factory(pnl=150.0, direction=-1),  # Short win
         ]
         equity = pd.Series(
             [10000.0, 10300.0],
@@ -219,7 +192,7 @@ class TestCalculateMetrics:
         assert metrics["long_win_rate"] == 0.5   # 1 win out of 2
         assert pytest.approx(metrics["short_win_rate"], rel=0.01) == 2/3  # 2 wins out of 3
 
-    def test_sharpe_ratio_positive_returns(self):
+    def test_sharpe_ratio_positive_returns(self, trade_factory):
         """Sharpe ratio should be positive for consistently positive returns."""
         # Create equity curve with consistent daily gains
         dates = pd.date_range("2024-01-01", periods=30)
@@ -227,41 +200,41 @@ class TestCalculateMetrics:
             [10000 + i * 10 for i in range(30)],  # +10 per day
             index=dates,
         )
-        trades = [create_trade(pnl=290.0)]
+        trades = [trade_factory(pnl=290.0)]
 
         metrics = calculate_metrics(trades, equity)
 
         assert metrics["sharpe_ratio"] > 0
 
-    def test_sharpe_ratio_zero_volatility(self):
+    def test_sharpe_ratio_zero_volatility(self, trade_factory):
         """Sharpe ratio should be 0 when there's no volatility."""
         # Flat equity curve
         dates = pd.date_range("2024-01-01", periods=10)
         equity = pd.Series([10000.0] * 10, index=dates)
-        trades = [create_trade(pnl=0.0)]
+        trades = [trade_factory(pnl=0.0)]
 
         metrics = calculate_metrics(trades, equity)
 
         assert metrics["sharpe_ratio"] == 0
 
-    def test_total_return_pct_calculation(self):
+    def test_total_return_pct_calculation(self, trade_factory):
         """Total return percentage should be (final - initial) / initial."""
         equity = pd.Series(
             [10000.0, 12000.0],
             index=[datetime(2024, 1, 1), datetime(2024, 2, 1)],
         )
-        trades = [create_trade(pnl=2000.0)]
+        trades = [trade_factory(pnl=2000.0)]
 
         metrics = calculate_metrics(trades, equity)
 
         assert metrics["total_return_pct"] == 0.2  # (12000 - 10000) / 10000
 
-    def test_profit_factor_all_winners_no_losses(self):
+    def test_profit_factor_all_winners_no_losses(self, trade_factory):
         """Profit factor with no losses should equal infinity (Bug #6 fix)."""
         trades = [
-            create_trade(pnl=300.0),  # Win
-            create_trade(pnl=200.0),  # Win
-            create_trade(pnl=100.0),  # Win
+            trade_factory(pnl=300.0),  # Win
+            trade_factory(pnl=200.0),  # Win
+            trade_factory(pnl=100.0),  # Win
         ]
         equity = pd.Series(
             [10000.0, 10300.0, 10500.0, 10600.0],
@@ -291,11 +264,11 @@ class TestCalculateMetrics:
         assert metrics["sharpe_ratio"] == 0, \
             f"Sharpe ratio with zero volatility should be 0, got {metrics['sharpe_ratio']}"
 
-    def test_avg_loss_with_no_losses(self):
+    def test_avg_loss_with_no_losses(self, trade_factory):
         """Average loss with no losses should be 0."""
         trades = [
-            create_trade(pnl=100.0),  # Win
-            create_trade(pnl=200.0),  # Win
+            trade_factory(pnl=100.0),  # Win
+            trade_factory(pnl=200.0),  # Win
         ]
         equity = pd.Series(
             [10000.0, 10100.0, 10300.0],
@@ -307,11 +280,11 @@ class TestCalculateMetrics:
         assert metrics["avg_loss"] == 0, \
             f"Average loss with no losses should be 0, got {metrics['avg_loss']}"
 
-    def test_avg_win_with_no_wins(self):
+    def test_avg_win_with_no_wins(self, trade_factory):
         """Average win with no wins should be 0."""
         trades = [
-            create_trade(pnl=-100.0),  # Loss
-            create_trade(pnl=-200.0),  # Loss
+            trade_factory(pnl=-100.0),  # Loss
+            trade_factory(pnl=-200.0),  # Loss
         ]
         equity = pd.Series(
             [10000.0, 9900.0, 9700.0],
@@ -327,11 +300,11 @@ class TestCalculateMetrics:
 class TestTradesToDataframe:
     """Tests for trades_to_dataframe function."""
 
-    def test_converts_trades_to_dataframe(self):
+    def test_converts_trades_to_dataframe(self, trade_factory):
         """Should convert list of trades to DataFrame."""
         trades = [
-            create_trade(pnl=100.0, direction=1),
-            create_trade(pnl=-50.0, direction=-1),
+            trade_factory(pnl=100.0, direction=1),
+            trade_factory(pnl=-50.0, direction=-1),
         ]
 
         df = trades_to_dataframe(trades)
@@ -346,9 +319,9 @@ class TestTradesToDataframe:
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 0
 
-    def test_dataframe_has_required_columns(self):
+    def test_dataframe_has_required_columns(self, trade_factory):
         """DataFrame should have all expected columns from Trade.to_dict()."""
-        trades = [create_trade(pnl=100.0)]
+        trades = [trade_factory(pnl=100.0)]
 
         df = trades_to_dataframe(trades)
 
@@ -366,9 +339,9 @@ class TestTradesToDataframe:
         assert df.iloc[0]["entry_price_a"] == 100.0, "Entry price A should match trade"
         assert df.iloc[0]["exit_reason"] == "crossing", "Exit reason should match trade"
 
-    def test_dataframe_values_match_trade(self):
+    def test_dataframe_values_match_trade(self, trade_factory):
         """DataFrame values should match original Trade object."""
-        trade = create_trade(pnl=123.45, direction=1, holding_days=7)
+        trade = trade_factory(pnl=123.45, direction=1, holding_days=7)
 
         df = trades_to_dataframe([trade])
 
@@ -406,16 +379,16 @@ class TestCalculateMonthlyPnlSeries:
         assert isinstance(result, pd.Series)
         assert len(result) == 0
 
-    def test_aggregates_by_exit_month(self):
+    def test_aggregates_by_exit_month(self, trade_factory):
         """Trades should be grouped by exit month."""
         # Create trades in different months
-        trade1 = create_trade(pnl=100.0, holding_days=10)  # Jan
-        trade2 = create_trade(pnl=200.0, holding_days=10)  # Jan
+        trade1 = trade_factory(pnl=100.0, holding_days=10)  # Jan
+        trade2 = trade_factory(pnl=200.0, holding_days=10)  # Jan
 
         # Modify exit dates to be in different months
         trade1.exit_date = datetime(2024, 1, 15)
         trade2.exit_date = datetime(2024, 1, 20)
-        trade3 = create_trade(pnl=300.0, holding_days=10)
+        trade3 = trade_factory(pnl=300.0, holding_days=10)
         trade3.exit_date = datetime(2024, 2, 15)
 
         result = calculate_monthly_pnl_series([trade1, trade2, trade3])
@@ -428,10 +401,10 @@ class TestCalculateMonthlyPnlSeries:
         feb_period = pd.Period("2024-02", freq="M")
         assert result[feb_period] == 300.0
 
-    def test_handles_negative_pnl(self):
+    def test_handles_negative_pnl(self, trade_factory):
         """Should correctly sum negative P&L."""
-        trade1 = create_trade(pnl=-500.0)
-        trade2 = create_trade(pnl=200.0)
+        trade1 = trade_factory(pnl=-500.0)
+        trade2 = trade_factory(pnl=200.0)
         trade1.exit_date = datetime(2024, 1, 15)
         trade2.exit_date = datetime(2024, 1, 20)
 
@@ -450,12 +423,12 @@ class TestCalculateGGRDollarMetrics:
         metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
         assert metrics == {}
 
-    def test_total_pnl_is_sum_of_trade_pnl(self):
+    def test_total_pnl_is_sum_of_trade_pnl(self, trade_factory):
         """Total P&L should equal sum of all trade P&L."""
         trades = [
-            create_trade(pnl=100.0),
-            create_trade(pnl=-50.0),
-            create_trade(pnl=200.0),
+            trade_factory(pnl=100.0),
+            trade_factory(pnl=-50.0),
+            trade_factory(pnl=200.0),
         ]
         result = MockStaggeredResult(trades=trades)
 
@@ -463,12 +436,12 @@ class TestCalculateGGRDollarMetrics:
 
         assert metrics["total_pnl"] == 250.0  # 100 + (-50) + 200
 
-    def test_fully_invested_capital_based_on_traded_pairs(self):
+    def test_fully_invested_capital_based_on_traded_pairs(self, trade_factory):
         """Fully invested capital should count unique pairs that traded."""
         trades = [
-            create_trade(pnl=100.0, pair=("A", "B")),
-            create_trade(pnl=100.0, pair=("A", "B")),  # Same pair
-            create_trade(pnl=100.0, pair=("C", "D")),  # Different pair
+            trade_factory(pnl=100.0, pair=("A", "B")),
+            trade_factory(pnl=100.0, pair=("A", "B")),  # Same pair
+            trade_factory(pnl=100.0, pair=("C", "D")),  # Different pair
         ]
         result = MockStaggeredResult(trades=trades)
 
@@ -478,9 +451,9 @@ class TestCalculateGGRDollarMetrics:
         assert metrics["pairs_traded"] == 2
         assert metrics["capital_fully_invested"] == 20000.0  # 2 * 10000
 
-    def test_committed_capital_uses_all_pairs_and_avg_active(self):
+    def test_committed_capital_uses_all_pairs_and_avg_active(self, trade_factory):
         """Committed capital should use n_pairs × avg_active × capital_per_trade."""
-        trades = [create_trade(pnl=100.0)]
+        trades = [trade_factory(pnl=100.0)]
         result = MockStaggeredResult(trades=trades, avg_active=4.5)
 
         metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
@@ -488,9 +461,9 @@ class TestCalculateGGRDollarMetrics:
         # 10 pairs × 4.5 avg active × $10k = $450k
         assert metrics["capital_committed"] == 450000.0
 
-    def test_return_fully_invested_calculation(self):
+    def test_return_fully_invested_calculation(self, trade_factory):
         """Fully invested return = P&L / capital_fully_invested."""
-        trades = [create_trade(pnl=1000.0, pair=("A", "B"))]
+        trades = [trade_factory(pnl=1000.0, pair=("A", "B"))]
         result = MockStaggeredResult(trades=trades)
 
         metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
@@ -499,9 +472,9 @@ class TestCalculateGGRDollarMetrics:
         # Return: 1000 / 10000 = 0.10 (10%)
         assert metrics["return_fully_invested"] == pytest.approx(0.10)
 
-    def test_return_committed_calculation(self):
+    def test_return_committed_calculation(self, trade_factory):
         """Committed return = P&L / capital_committed."""
-        trades = [create_trade(pnl=4500.0, pair=("A", "B"))]
+        trades = [trade_factory(pnl=4500.0, pair=("A", "B"))]
         result = MockStaggeredResult(trades=trades, avg_active=4.5)
 
         metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
@@ -510,9 +483,9 @@ class TestCalculateGGRDollarMetrics:
         # Return: 4500 / 450000 = 0.01 (1%)
         assert metrics["return_committed"] == pytest.approx(0.01)
 
-    def test_negative_pnl_gives_negative_return(self):
+    def test_negative_pnl_gives_negative_return(self, trade_factory):
         """Negative P&L should produce negative return."""
-        trades = [create_trade(pnl=-5000.0)]
+        trades = [trade_factory(pnl=-5000.0)]
         result = MockStaggeredResult(trades=trades, avg_active=1.0)
 
         metrics = calculate_ggr_dollar_metrics(result, capital_per_trade=10000, n_pairs=10)
@@ -521,10 +494,10 @@ class TestCalculateGGRDollarMetrics:
         assert metrics["return_committed"] < 0
         assert metrics["ann_return_committed"] < 0
 
-    def test_return_sign_matches_pnl_sign(self):
+    def test_return_sign_matches_pnl_sign(self, trade_factory):
         """Return sign should always match P&L sign."""
         # Positive P&L
-        trades_pos = [create_trade(pnl=1000.0)]
+        trades_pos = [trade_factory(pnl=1000.0)]
         result_pos = MockStaggeredResult(trades=trades_pos, avg_active=1.0)
         metrics_pos = calculate_ggr_dollar_metrics(result_pos, capital_per_trade=10000, n_pairs=10)
 
@@ -532,14 +505,14 @@ class TestCalculateGGRDollarMetrics:
         assert metrics_pos["return_committed"] > 0
 
         # Negative P&L
-        trades_neg = [create_trade(pnl=-1000.0)]
+        trades_neg = [trade_factory(pnl=-1000.0)]
         result_neg = MockStaggeredResult(trades=trades_neg, avg_active=1.0)
         metrics_neg = calculate_ggr_dollar_metrics(result_neg, capital_per_trade=10000, n_pairs=10)
 
         assert metrics_neg["total_pnl"] < 0
         assert metrics_neg["return_committed"] < 0
 
-    def test_sharpe_ratio_calculated(self):
+    def test_sharpe_ratio_calculated(self, trade_factory):
         """Sharpe ratio should be calculated from monthly returns."""
         # Create trades across multiple months with large enough P&L
         # to exceed the risk-free rate (2% / 12 = 0.17% monthly)
@@ -548,7 +521,7 @@ class TestCalculateGGRDollarMetrics:
         # Need monthly P&L > $100k * 0.17% = $170 to beat risk-free rate
         pnl_values = [5000.0, 6000.0, 4000.0, 7000.0, 5500.0, 6500.0]  # Large varying P&L
         for month, pnl in enumerate(pnl_values, start=1):
-            trade = create_trade(pnl=pnl)
+            trade = trade_factory(pnl=pnl)
             trade.exit_date = datetime(2024, month, 15)
             trades.append(trade)
 
@@ -561,7 +534,7 @@ class TestCalculateGGRDollarMetrics:
         # With returns exceeding risk-free rate, Sharpe should be positive
         assert metrics["sharpe_ratio"] > 0
 
-    def test_max_drawdown_calculated(self):
+    def test_max_drawdown_calculated(self, trade_factory):
         """Max drawdown should be calculated from cumulative P&L."""
         # Create trades: win, win, big loss, small win
         # P&L: 100, 200, -500, 50 -> Cumulative: 100, 300, -200, -150
@@ -569,7 +542,7 @@ class TestCalculateGGRDollarMetrics:
         trades = []
         pnl_values = [100.0, 200.0, -500.0, 50.0]
         for day, pnl in enumerate(pnl_values, start=1):
-            trade = create_trade(pnl=pnl)
+            trade = trade_factory(pnl=pnl)
             trade.exit_date = datetime(2024, 1, day * 5)
             trades.append(trade)
 
@@ -593,11 +566,11 @@ class TestCalculateCumulativePnlSeries:
         assert isinstance(result, pd.Series)
         assert len(result) == 0
 
-    def test_cumulative_sum_correct(self):
+    def test_cumulative_sum_correct(self, trade_factory):
         """Cumulative sum should add up correctly."""
-        trade1 = create_trade(pnl=100.0)
-        trade2 = create_trade(pnl=200.0)
-        trade3 = create_trade(pnl=-50.0)
+        trade1 = trade_factory(pnl=100.0)
+        trade2 = trade_factory(pnl=200.0)
+        trade3 = trade_factory(pnl=-50.0)
 
         # Set different exit dates
         trade1.exit_date = datetime(2024, 1, 10)
@@ -612,10 +585,10 @@ class TestCalculateCumulativePnlSeries:
         assert result.iloc[1] == 300.0
         assert result.iloc[2] == 250.0
 
-    def test_orders_by_date(self):
+    def test_orders_by_date(self, trade_factory):
         """Series should be ordered by exit date."""
-        trade1 = create_trade(pnl=100.0)
-        trade2 = create_trade(pnl=200.0)
+        trade1 = trade_factory(pnl=100.0)
+        trade2 = trade_factory(pnl=200.0)
 
         # Set dates out of order
         trade1.exit_date = datetime(2024, 2, 1)
@@ -629,11 +602,11 @@ class TestCalculateCumulativePnlSeries:
         assert result.iloc[0] == 200.0
         assert result.iloc[1] == 300.0
 
-    def test_multiple_trades_same_day(self):
+    def test_multiple_trades_same_day(self, trade_factory):
         """Trades on same day should be summed."""
-        trade1 = create_trade(pnl=100.0)
-        trade2 = create_trade(pnl=150.0)
-        trade3 = create_trade(pnl=50.0)
+        trade1 = trade_factory(pnl=100.0)
+        trade2 = trade_factory(pnl=150.0)
+        trade3 = trade_factory(pnl=50.0)
 
         # All exit on same day
         same_date = datetime(2024, 1, 15)
@@ -657,14 +630,14 @@ class TestCalculateCumulativePnlSeries:
 class TestWinLossClassification:
     """Tests for correct win/loss/breakeven classification (Bug #4 fix)."""
 
-    def test_breakeven_not_counted_as_loss(self):
+    def test_breakeven_not_counted_as_loss(self, trade_factory):
         """Trade with P&L = 0 should not be in losses list."""
         trades = [
-            create_trade(pnl=100.0),  # Win
-            create_trade(pnl=-50.0),  # Loss
-            create_trade(pnl=0.0),    # Break-even
-            create_trade(pnl=200.0),  # Win
-            create_trade(pnl=-100.0), # Loss
+            trade_factory(pnl=100.0),  # Win
+            trade_factory(pnl=-50.0),  # Loss
+            trade_factory(pnl=0.0),    # Break-even
+            trade_factory(pnl=200.0),  # Win
+            trade_factory(pnl=-100.0), # Loss
         ]
         equity = pd.Series(
             [10000.0, 10150.0],
@@ -677,12 +650,12 @@ class TestWinLossClassification:
         assert metrics["win_rate"] == pytest.approx(0.5), \
             f"Win rate should be 50% with 2 wins and 2 losses, got {metrics['win_rate']}"
 
-    def test_win_rate_excludes_breakeven(self):
+    def test_win_rate_excludes_breakeven(self, trade_factory):
         """Win rate should be wins / (wins + losses), excluding breakeven."""
         trades = [
-            create_trade(pnl=100.0),  # Win
-            create_trade(pnl=-50.0),  # Loss
-            create_trade(pnl=0.0),    # Break-even
+            trade_factory(pnl=100.0),  # Win
+            trade_factory(pnl=-50.0),  # Loss
+            trade_factory(pnl=0.0),    # Break-even
         ]
         equity = pd.Series(
             [10000.0, 10050.0],
@@ -695,12 +668,12 @@ class TestWinLossClassification:
         assert metrics["win_rate"] == pytest.approx(0.5), \
             f"Win rate should be 50% (1 win / 2 decided), got {metrics['win_rate']}"
 
-    def test_all_breakeven_trades(self):
+    def test_all_breakeven_trades(self, trade_factory):
         """All breakeven trades should result in 0 win rate."""
         trades = [
-            create_trade(pnl=0.0),
-            create_trade(pnl=0.0),
-            create_trade(pnl=0.0),
+            trade_factory(pnl=0.0),
+            trade_factory(pnl=0.0),
+            trade_factory(pnl=0.0),
         ]
         equity = pd.Series(
             [10000.0, 10000.0],
@@ -713,13 +686,13 @@ class TestWinLossClassification:
         assert metrics["win_rate"] == 0, \
             f"Win rate should be 0 with all breakeven trades, got {metrics['win_rate']}"
 
-    def test_avg_loss_excludes_breakeven(self):
+    def test_avg_loss_excludes_breakeven(self, trade_factory):
         """Average loss should only consider actual losses."""
         trades = [
-            create_trade(pnl=100.0),   # Win
-            create_trade(pnl=-100.0),  # Loss
-            create_trade(pnl=0.0),     # Break-even
-            create_trade(pnl=-200.0),  # Loss
+            trade_factory(pnl=100.0),   # Win
+            trade_factory(pnl=-100.0),  # Loss
+            trade_factory(pnl=0.0),     # Break-even
+            trade_factory(pnl=-200.0),  # Loss
         ]
         equity = pd.Series(
             [10000.0, 9800.0],
@@ -741,12 +714,12 @@ class TestWinLossClassification:
 class TestProfitFactorEdgeCases:
     """Tests for profit factor edge cases (Bug #6 fix)."""
 
-    def test_profit_factor_all_winners_returns_infinity(self):
+    def test_profit_factor_all_winners_returns_infinity(self, trade_factory):
         """All winning trades should return profit_factor = inf."""
         trades = [
-            create_trade(pnl=100.0),
-            create_trade(pnl=200.0),
-            create_trade(pnl=300.0),
+            trade_factory(pnl=100.0),
+            trade_factory(pnl=200.0),
+            trade_factory(pnl=300.0),
         ]
         equity = pd.Series(
             [10000.0, 10600.0],
@@ -759,12 +732,12 @@ class TestProfitFactorEdgeCases:
         assert metrics["profit_factor"] == float("inf"), \
             f"Profit factor with all winners should be inf, got {metrics['profit_factor']}"
 
-    def test_profit_factor_all_losers_returns_zero(self):
+    def test_profit_factor_all_losers_returns_zero(self, trade_factory):
         """All losing trades should return profit_factor = 0."""
         trades = [
-            create_trade(pnl=-100.0),
-            create_trade(pnl=-200.0),
-            create_trade(pnl=-300.0),
+            trade_factory(pnl=-100.0),
+            trade_factory(pnl=-200.0),
+            trade_factory(pnl=-300.0),
         ]
         equity = pd.Series(
             [10000.0, 9400.0],
@@ -777,11 +750,11 @@ class TestProfitFactorEdgeCases:
         assert metrics["profit_factor"] == 0, \
             f"Profit factor with all losers should be 0, got {metrics['profit_factor']}"
 
-    def test_profit_factor_is_dimensionless_ratio(self):
+    def test_profit_factor_is_dimensionless_ratio(self, trade_factory):
         """Profit factor should be ratio, not dollar amount."""
         trades = [
-            create_trade(pnl=100.0),  # Win
-            create_trade(pnl=-50.0),  # Loss
+            trade_factory(pnl=100.0),  # Win
+            trade_factory(pnl=-50.0),  # Loss
         ]
         equity = pd.Series(
             [10000.0, 10050.0],

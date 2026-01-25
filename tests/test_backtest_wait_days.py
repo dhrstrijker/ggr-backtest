@@ -4,78 +4,14 @@ The GGR paper discusses waiting one day after signal to trade, to account
 for bid-ask bounce. This module tests both execution modes:
 - wait_days=1 (default): Execute at next-day OPEN
 - wait_days=0: Execute at same-day CLOSE
+
+Note: Uses wait_days_test_data fixture from conftest.py.
 """
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from src.backtest import BacktestConfig, run_backtest_single_pair
-
-
-def create_test_data():
-    """Create test data that will generate a trade."""
-    dates = pd.date_range("2024-01-01", periods=60, freq="B")
-
-    # Formation period: 30 days with low volatility
-    formation_dates = dates[:30]
-    formation_a = pd.Series(100.0, index=formation_dates)
-    formation_b = pd.Series(100.0, index=formation_dates)
-
-    # Add DIFFERENT variations to get non-zero spread std (Bug #8 fix requires this)
-    formation_a = formation_a + np.sin(np.arange(30)) * 0.5
-    formation_b = formation_b + np.cos(np.arange(30)) * 0.5  # Different pattern!
-
-    formation_close = pd.DataFrame({
-        "A": formation_a,
-        "B": formation_b,
-    })
-
-    # Trading period: 30 days with divergence then convergence
-    trading_dates = dates[30:]
-
-    # Create divergence that triggers entry, then convergence
-    trading_a_close = pd.Series(index=trading_dates, dtype=float)
-    trading_b_close = pd.Series(index=trading_dates, dtype=float)
-    trading_a_open = pd.Series(index=trading_dates, dtype=float)
-    trading_b_open = pd.Series(index=trading_dates, dtype=float)
-
-    for i, date in enumerate(trading_dates):
-        if i < 5:
-            # Initial period - prices close together
-            trading_a_close[date] = 100.0 + i * 0.1
-            trading_b_close[date] = 100.0 + i * 0.1
-            trading_a_open[date] = 100.0 + i * 0.1 - 0.05
-            trading_b_open[date] = 100.0 + i * 0.1 - 0.05
-        elif i < 10:
-            # Divergence - A rises, B stays flat (triggers short spread entry)
-            trading_a_close[date] = 100.5 + (i - 5) * 2.0  # Rising
-            trading_b_close[date] = 100.5                   # Flat
-            trading_a_open[date] = trading_a_close[date] - 0.5  # Open slightly lower
-            trading_b_open[date] = 100.5
-        elif i < 20:
-            # Convergence - A falls back to B
-            trading_a_close[date] = 108.5 - (i - 10) * 0.85
-            trading_b_close[date] = 100.5
-            trading_a_open[date] = trading_a_close[date] + 0.3
-            trading_b_open[date] = 100.5
-        else:
-            # Post-convergence
-            trading_a_close[date] = 100.0
-            trading_b_close[date] = 100.0
-            trading_a_open[date] = 100.0
-            trading_b_open[date] = 100.0
-
-    trading_close = pd.DataFrame({
-        "A": trading_a_close,
-        "B": trading_b_close,
-    })
-    trading_open = pd.DataFrame({
-        "A": trading_a_open,
-        "B": trading_b_open,
-    })
-
-    return formation_close, trading_close, trading_open
 
 
 class TestWaitDaysParameter:
@@ -91,9 +27,9 @@ class TestWaitDaysParameter:
         config = BacktestConfig(wait_days=0)
         assert config.wait_days == 0
 
-    def test_wait_days_zero_vs_one_different_entry_prices(self):
+    def test_wait_days_zero_vs_one_different_entry_prices(self, wait_days_test_data):
         """Entry prices should differ between wait_days=0 and wait_days=1."""
-        formation_close, trading_close, trading_open = create_test_data()
+        formation_close, trading_close, trading_open = wait_days_test_data
         pair = ("A", "B")
 
         # Run with wait_days=1 (next-day open)
@@ -142,9 +78,9 @@ class TestWaitDaysParameter:
             f"Entry dates should differ: wait_days=0 on {trade_0.entry_date}, " \
             f"wait_days=1 on {trade_1.entry_date}"
 
-    def test_wait_days_affects_entry_date(self):
+    def test_wait_days_affects_entry_date(self, wait_days_test_data):
         """Entry date should differ by one day between wait_days=0 and wait_days=1."""
-        formation_close, trading_close, trading_open = create_test_data()
+        formation_close, trading_close, trading_open = wait_days_test_data
         pair = ("A", "B")
 
         config_wait_1 = BacktestConfig(entry_threshold=2.0, max_holding_days=50, wait_days=1)
@@ -170,9 +106,9 @@ class TestWaitDaysParameter:
         assert entry_date_1 > entry_date_0, \
             f"wait_days=1 entry ({entry_date_1}) should be after wait_days=0 entry ({entry_date_0})"
 
-    def test_wait_days_one_uses_open_prices(self):
+    def test_wait_days_one_uses_open_prices(self, wait_days_test_data):
         """wait_days=1 should execute at OPEN prices."""
-        formation_close, trading_close, trading_open = create_test_data()
+        formation_close, trading_close, trading_open = wait_days_test_data
         pair = ("A", "B")
 
         config = BacktestConfig(entry_threshold=2.0, max_holding_days=50, wait_days=1)
@@ -195,9 +131,9 @@ class TestWaitDaysParameter:
         assert trade.entry_price_b == expected_open_b, \
             f"Entry price B should be open price: {expected_open_b}, got {trade.entry_price_b}"
 
-    def test_wait_days_zero_uses_close_prices(self):
+    def test_wait_days_zero_uses_close_prices(self, wait_days_test_data):
         """wait_days=0 should execute at CLOSE prices."""
-        formation_close, trading_close, trading_open = create_test_data()
+        formation_close, trading_close, trading_open = wait_days_test_data
         pair = ("A", "B")
 
         config = BacktestConfig(entry_threshold=2.0, max_holding_days=50, wait_days=0)
@@ -220,9 +156,9 @@ class TestWaitDaysParameter:
         assert trade.entry_price_b == expected_close_b, \
             f"Entry price B should be close price: {expected_close_b}, got {trade.entry_price_b}"
 
-    def test_both_wait_modes_produce_valid_trades(self):
+    def test_both_wait_modes_produce_valid_trades(self, wait_days_test_data):
         """Both wait modes should produce valid trades with positive shares."""
-        formation_close, trading_close, trading_open = create_test_data()
+        formation_close, trading_close, trading_open = wait_days_test_data
         pair = ("A", "B")
 
         for wait_days in [0, 1]:

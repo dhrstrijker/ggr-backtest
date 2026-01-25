@@ -18,97 +18,8 @@ from src.staggered import (
 )
 from src.backtest import BacktestConfig
 
-
-# =============================================================================
-# Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def sample_dates():
-    """Generate 3 years of trading dates (approx 756 trading days)."""
-    return pd.bdate_range(start="2020-01-01", periods=756, freq="B")
-
-
-@pytest.fixture
-def sample_prices(sample_dates):
-    """Generate sample price data for multiple symbols."""
-    np.random.seed(42)
-    n_days = len(sample_dates)
-    symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM"]
-
-    # Generate correlated random walks for prices
-    close_data = {}
-    open_data = {}
-
-    for i, sym in enumerate(symbols):
-        # Start at different prices
-        base_price = 100 + i * 20
-        # Generate returns with drift
-        returns = np.random.normal(0.0003, 0.02, n_days)
-        prices = base_price * np.exp(np.cumsum(returns))
-        close_data[sym] = prices
-        # Open prices with small gap from previous close
-        open_data[sym] = prices * (1 + np.random.normal(0, 0.001, n_days))
-
-    close_prices = pd.DataFrame(close_data, index=sample_dates)
-    open_prices = pd.DataFrame(open_data, index=sample_dates)
-
-    return close_prices, open_prices
-
-
-@pytest.fixture
-def short_sample_prices():
-    """Generate shorter sample for quick tests."""
-    np.random.seed(42)
-    dates = pd.bdate_range(start="2020-01-01", periods=400, freq="B")
-    symbols = ["A", "B", "C", "D"]
-
-    close_data = {}
-    open_data = {}
-
-    for i, sym in enumerate(symbols):
-        base_price = 100 + i * 10
-        returns = np.random.normal(0.0003, 0.02, len(dates))
-        prices = base_price * np.exp(np.cumsum(returns))
-        close_data[sym] = prices
-        open_data[sym] = prices * (1 + np.random.normal(0, 0.001, len(dates)))
-
-    close_prices = pd.DataFrame(close_data, index=dates)
-    open_prices = pd.DataFrame(open_data, index=dates)
-
-    return close_prices, open_prices
-
-
-@pytest.fixture
-def prices_with_missing_data():
-    """Generate prices with some symbols having missing data."""
-    np.random.seed(42)
-    dates = pd.bdate_range(start="2020-01-01", periods=500, freq="B")
-    symbols = ["A", "B", "C", "D"]
-
-    close_data = {}
-    open_data = {}
-
-    for i, sym in enumerate(symbols):
-        base_price = 100 + i * 10
-        returns = np.random.normal(0.0003, 0.02, len(dates))
-        prices = base_price * np.exp(np.cumsum(returns))
-        close_data[sym] = prices.copy()
-        open_data[sym] = prices * (1 + np.random.normal(0, 0.001, len(dates)))
-
-    # Add NaN values to symbol "C" (starts later)
-    close_data["C"][:100] = np.nan
-    open_data["C"][:100] = np.nan
-
-    # Add NaN values to symbol "D" (ends earlier)
-    close_data["D"][-50:] = np.nan
-    open_data["D"][-50:] = np.nan
-
-    close_prices = pd.DataFrame(close_data, index=dates)
-    open_prices = pd.DataFrame(open_data, index=dates)
-
-    return close_prices, open_prices
+# Note: sample_dates, sample_prices, short_sample_prices, and prices_with_missing_data
+# fixtures are defined in conftest.py
 
 
 # =============================================================================
@@ -473,6 +384,7 @@ class TestAggregateMonthlyReturns:
 class TestRunStaggeredBacktest:
     """Integration tests for run_staggered_backtest."""
 
+    @pytest.mark.slow
     def test_full_pipeline(self, sample_prices):
         """Test full staggered backtest pipeline."""
         close_prices, open_prices = sample_prices
