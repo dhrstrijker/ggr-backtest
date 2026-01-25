@@ -11,6 +11,11 @@ __pycache__/
 *$py.class
 *.pyc
 
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
 # Pytest cache
 .pytest_cache/
 .coverage
